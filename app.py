@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple, Dict, Any
 from enum import Enum
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Icarus: Validador IFRS 2", layout="wide")
+st.set_page_config(page_title="Icarus: Beta 1", layout="wide")
 
 # =============================================================================
 # CAMADA 1: DOMÍNIO E ESTRUTURAS DE DADOS
