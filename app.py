@@ -446,7 +446,7 @@ class DocumentService:
 
 class IFRS2App:
     def run(self):
-        st.title("🛡️ Icarus: Validador IFRS 2 (Completo)")
+        st.title("🛡️ Icarus:Icarus: Beta 1")
         
         # Inicializa estado da sessão para persistência da análise e tranches
         if 'analysis_result' not in st.session_state:
