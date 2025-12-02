@@ -267,7 +267,7 @@ class DocumentService:
         model = DocumentService.genai.GenerativeModel('gemini-2.5-flash')
         
         prompt = f"""
-        Você é um Especialista em IFRS 2 e Atuária. Analise o contrato de ILP abaixo.
+        Você é um Especialista em IFRS 2 e Atuária. Analise o contrato abaixo e identifique se ele é um PLANO ÚNICO ou um PLANO HÍBRIDO composto de multiplos programas.
         Extraia parâmetros técnicos e forneça uma justificativa metodológica robusta.
         
         ATENÇÃO AOS DETALHES TÉCNICOS:
@@ -278,7 +278,7 @@ class DocumentService:
         - TIPO DE PLANO: Identifique se é Matching Shares ou Ações Restritas (Strike Zero).
         
         TEXTO:
-        {text[:35000]}
+        {text[:45000]}
 
         SAÍDA JSON (ESTRITA):
         {{
