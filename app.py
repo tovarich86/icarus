@@ -471,7 +471,7 @@ class IFRS2App:
             
             # Campo para inserção manual
             manual_text = st.text_area(
-                "2. Características Manuais (Opcional)", 
+                "2. Descreva o plano/programa (Opicional)", 
                 height=200, 
                 placeholder="Cole trechos do contrato ou descreva as regras:\nEx: 'Vesting em 4 anos, Strike R$ 10,00 corrigido por IGPM...'"
             )
