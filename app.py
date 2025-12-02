@@ -458,7 +458,12 @@ class IFRS2App:
 
         with st.sidebar:
             st.header("Entradas")
-            gemini_key = st.text_input("Gemini API Key", type="password")
+            # --- MODIFICAÇÃO PARA USAR SECRETS ---
+            if "GEMINI_API_KEY" in st.secrets:
+                gemini_key = st.secrets["GEMINI_API_KEY"]
+                st.success("🔑 API Key detectada (Secrets)")
+            else:
+                gemini_key = st.text_input("Gemini API Key", type="password")
             
             st.subheader("Dados do Plano")
             # Upload de arquivo (MODIFICADO: aceita múltiplos arquivos)
