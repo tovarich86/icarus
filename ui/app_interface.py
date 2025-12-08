@@ -307,7 +307,7 @@ class IFRS2App:
         key_w = f"rate_w_{prefix}_{i}"
         
         if key_val not in st.session_state: 
-            st.session_state[key_val] = 10.75
+            st.session_state[key_val] = .1075
         
         # Sincroniza visual com estado
         current_pct = st.session_state[key_val] * 100
