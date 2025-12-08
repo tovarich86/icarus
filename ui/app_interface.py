@@ -1,6 +1,6 @@
 """
 Módulo de Interface do Usuário (UI).
-Versão Corrigida: Fix do State Update em Widgets de Volatilidade e Taxa.
+Versão Corrigida: Uso de Callbacks para evitar StreamlitAPIException.
 """
 
 import streamlit as st
@@ -8,8 +8,8 @@ import pandas as pd
 import numpy as np
 import io
 import sys
-from datetime import date, timedelta, datetime
-from typing import List, Dict, Any
+from datetime import date, timedelta
+from typing import List, Dict
 
 from core.domain import PlanAnalysisResult, Tranche, PricingModelType, SettlementType
 from engines.financial import FinancialMath
@@ -66,7 +66,7 @@ class IFRS2App:
                 self._handle_analysis(uploaded_files, manual_text, gemini_key)
             
             st.divider()
-            st.caption("v.Release 1.1 - State Fix")
+            st.caption("v.Release 1.2 - Callback Fix")
 
         # --- ÁREA PRINCIPAL ---
         if st.session_state['analysis_result']:
@@ -78,6 +78,46 @@ class IFRS2App:
         else:
             self._render_empty_state()
 
+    # --- CALLBACKS (Novos métodos para correção do erro) ---
+    def _update_widget_state(self, key_val: str, key_widget: str, value: float):
+        """
+        Callback genérico para atualizar o estado de um widget antes do rerun.
+        Evita o erro 'StreamlitAPIException: Set value...'
+        """
+        st.session_state[key_val] = value
+        st.session_state[key_widget] = value
+
+    def _rate_search_callback(self, i: int, key_val: str, key_widget: str):
+        """
+        Callback específico para o botão de busca da Taxa DI.
+        Executa a busca e atualiza o estado antes da renderização.
+        """
+        try:
+            # Recupera as datas que estão nos widgets (dentro do popover)
+            key_d1 = f"p_r_d1_{i}"
+            key_d2 = f"p_r_d2_{i}"
+            
+            p_ref = st.session_state.get(key_d1, date.today())
+            p_tgt = st.session_state.get(key_d2, date.today())
+            
+            # Executa a busca
+            df_di = MarketDataService.get_di_data_b3(p_ref)
+            if not df_di.empty:
+                _, taxa, _ = MarketDataService.get_closest_di_vertex(p_tgt, df_di)
+                new_rate = taxa * 100
+                
+                # Atualiza o estado
+                st.session_state[key_val] = new_rate
+                st.session_state[key_widget] = new_rate
+                
+                # Feedback visual (opcional, via toast pois st.success não renderiza bem em callback)
+                st.toast(f"Taxa DI atualizada para {new_rate:.2f}%", icon="✅")
+            else:
+                st.toast("Não foi possível obter dados da B3.", icon="⚠️")
+        except Exception as e:
+            st.toast(f"Erro na busca: {str(e)}", icon="❌")
+
+    # --- MÉTODOS DE RENDERIZAÇÃO ---
     def _render_empty_state(self):
         """Tela inicial antes da análise."""
         st.info("👈 Faça o upload do contrato na barra lateral para iniciar a análise.")
@@ -93,7 +133,6 @@ class IFRS2App:
         """Processa a entrada e chama o serviço de IA."""
         combined_text = ""
         
-        # Extração de Texto
         if uploaded_files:
             with st.spinner("Lendo arquivos..."):
                 for f in uploaded_files:
@@ -109,20 +148,17 @@ class IFRS2App:
 
         st.session_state['full_context_text'] = combined_text
         
-        # Análise IA
         if api_key:
-            with st.spinner("🤖 IA Analisando estrutura do plano e classificação contábil..."):
+            with st.spinner("🤖 IA Analisando estrutura do plano..."):
                 analysis = DocumentService.analyze_plan_with_gemini(combined_text, api_key)
         else:
             st.warning("⚠️ Sem API Key: Usando Mock.")
             analysis = DocumentService.mock_analysis(combined_text)
             
         if analysis:
-            # Seleção de Modelo e Setup Inicial
             analysis = ModelSelectorService.select_model(analysis)
             st.session_state['analysis_result'] = analysis
             
-            # Inicializa tranches editáveis no estado
             if analysis.tranches:
                 st.session_state['tranches'] = [t for t in analysis.tranches]
             else:
@@ -176,7 +212,7 @@ class IFRS2App:
         
         c_glob1, c_glob2, c_glob3, c_glob4 = st.columns(4)
         
-        S = c_glob1.number_input("Preço da Ação (Spot) R$", 0.0, 10000.0, 50.0, help="Preço de fechamento na data base.")
+        S = c_glob1.number_input("Preço da Ação (Spot) R$", 0.0, 10000.0, 50.0)
         K = c_glob2.number_input("Preço de Exercício (Strike) R$", 0.0, 10000.0, analysis.strike_price)
         q = c_glob3.number_input("Dividend Yield (% a.a.)", 0.0, 100.0, 4.0) / 100
         
@@ -188,8 +224,8 @@ class IFRS2App:
         st.divider()
 
         # --- Seção 3: Configuração Granular por Tranche ---
-        st.subheader("4. Configuração por Tranche (Volatilidade & Taxa)")
-        st.caption("Configure as premissas de mercado específicas para cada vencimento. Use a lupa para buscar dados.")
+        st.subheader("4. Configuração por Tranche")
+        st.caption("Configure as premissas específicas. Use a lupa para buscar dados.")
         
         self._manage_tranches_buttons()
         tranches = st.session_state['tranches']
@@ -205,28 +241,13 @@ class IFRS2App:
                 
                 col_t, col_vol, col_rate = st.columns([1.2, 1.5, 1.5])
                 
-                # --- A. DADOS TEMPORAIS ---
+                # A. Dados Temporais
                 with col_t:
-                    t_exp = st.number_input(
-                        f"Vencimento (Anos)", 
-                        value=float(def_exp), 
-                        min_value=0.01, step=0.1, 
-                        key=f"t_exp_{i}"
-                    )
-                    t_vest = st.number_input(
-                        f"Vesting (Anos)", 
-                        value=float(t.vesting_date), 
-                        min_value=0.0, step=0.1, 
-                        key=f"t_vest_{i}"
-                    )
-                    t_prop = st.number_input(
-                        f"Peso (%)", 
-                        value=float(t.proportion * 100), 
-                        step=1.0, 
-                        key=f"t_prop_{i}"
-                    ) / 100
+                    t_exp = st.number_input(f"Vencimento (Anos)", value=float(def_exp), min_value=0.01, step=0.1, key=f"t_exp_{i}")
+                    t_vest = st.number_input(f"Vesting (Anos)", value=float(t.vesting_date), min_value=0.0, step=0.1, key=f"t_vest_{i}")
+                    t_prop = st.number_input(f"Peso (%)", value=float(t.proportion * 100), step=1.0, key=f"t_prop_{i}") / 100
 
-                # --- B. VOLATILIDADE (CORREÇÃO DE STATE) ---
+                # B. Volatilidade (Com Correção de State)
                 with col_vol:
                     st.markdown("**Volatilidade**")
                     cv_input, cv_pop = st.columns([0.85, 0.15])
@@ -234,18 +255,17 @@ class IFRS2App:
                     key_vol_val = f"vol_val_{i}"
                     key_vol_widget = f"input_vol_{i}"
                     
-                    # Inicializa state se necessário
                     if key_vol_val not in st.session_state: 
                         st.session_state[key_vol_val] = 30.00
                     
-                    # Widget principal usa o valor do state
+                    # Widget Principal
                     vol_final = cv_input.number_input(
                         "Anual (%)", 
                         value=st.session_state[key_vol_val], 
                         key=key_vol_widget,
                         format="%.2f", step=0.5, label_visibility="collapsed"
                     )
-                    # Sincroniza inversamente (se usuário digitar manualmente)
+                    # Sincronia reversa (manual)
                     st.session_state[key_vol_val] = vol_final
 
                     # Popover Inteligente
@@ -259,12 +279,14 @@ class IFRS2App:
                         
                         key_vol_search = f"vol_search_res_{i}"
                         
+                        # Botão de Busca (Não conflitante)
                         if st.button("Buscar Dados", key=f"btn_calc_vol_{i}"):
                             ticker_list = [x.strip() for x in p_tickers.split(',') if x.strip()]
                             with st.spinner("Calculando..."):
                                 res = MarketDataService.get_peer_group_volatility(ticker_list, p_start, p_end)
                                 st.session_state[key_vol_search] = res
                         
+                        # Exibição e Seleção
                         if key_vol_search in st.session_state:
                             res = st.session_state[key_vol_search]
                             if "summary" in res and res['summary']['count_valid'] > 0:
@@ -282,19 +304,19 @@ class IFRS2App:
                                     sel_label = st.radio("Métrica:", list(valid_opts.keys()), key=f"radio_vol_{i}")
                                     sel_val = valid_opts[sel_label]
                                     
-                                    if st.button("Aplicar Seleção", key=f"btn_apply_vol_{i}"):
-                                        # --- CORREÇÃO AQUI ---
-                                        # Atualiza TANTO o valor de armazenamento QUANTO a chave do widget
-                                        st.session_state[key_vol_val] = sel_val
-                                        st.session_state[key_vol_widget] = sel_val 
-                                        st.rerun()
+                                    # BOTÃO COM CALLBACK (CORREÇÃO DO ERRO)
+                                    st.button(
+                                        "Aplicar Seleção", 
+                                        key=f"btn_apply_vol_{i}",
+                                        on_click=self._update_widget_state,
+                                        args=(key_vol_val, key_vol_widget, sel_val)
+                                    )
                                 else:
                                     st.warning("Valores zerados.")
                             elif "details" in res:
                                 st.error("Erro na busca.")
-                                st.write(res['details'])
 
-                # --- C. TAXA DI (CORREÇÃO DE STATE) ---
+                # C. Taxa DI (Com Correção de State)
                 with col_rate:
                     st.markdown("**Taxa Livre de Risco (DI)**")
                     cr_input, cr_pop = st.columns([0.85, 0.15])
@@ -319,29 +341,17 @@ class IFRS2App:
                         tgt = p_ref + timedelta(days=int(t_exp * 365))
                         p_tgt = st.date_input("Vencimento", value=tgt, key=f"p_r_d2_{i}")
                         
-                        if st.button("Buscar B3", key=f"btn_calc_rate_{i}"):
-                            with st.spinner("Consultando B3..."):
-                                df_di = MarketDataService.get_di_data_b3(p_ref)
-                            
-                            if not df_di.empty:
-                                v_str, taxa, msg = MarketDataService.get_closest_di_vertex(p_tgt, df_di)
-                                new_rate = taxa * 100
-                                
-                                # --- CORREÇÃO AQUI ---
-                                st.session_state[key_rate_val] = new_rate
-                                st.session_state[key_rate_widget] = new_rate
-                                
-                                st.success(f"Taxa: {new_rate:.2f}%")
-                                st.caption(f"Vértice: {v_str}")
-                                st.rerun()
-                            else:
-                                st.error("Erro B3/Feriado.")
+                        # BOTÃO COM CALLBACK (CORREÇÃO DO ERRO)
+                        st.button(
+                            "Buscar B3", 
+                            key=f"btn_calc_rate_{i}",
+                            on_click=self._rate_search_callback,
+                            args=(i, key_rate_val, key_rate_widget)
+                        )
 
                 calculation_inputs.append({
                     "TrancheID": i+1,
-                    "T": t_exp,
-                    "Vesting": t_vest,
-                    "Prop": t_prop,
+                    "T": t_exp, "Vesting": t_vest, "Prop": t_prop,
                     "Vol": st.session_state[key_vol_val] / 100.0,
                     "r": st.session_state[key_rate_val] / 100.0,
                     "S": S, "K": K, "q": q, "Model": active_model,
