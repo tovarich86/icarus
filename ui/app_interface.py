@@ -1,8 +1,3 @@
-"""
-Módulo de Interface do Usuário (UI).
-Versão UX Friendly: Popover de DI com Tabela Interativa e Seleção Manual Inteligente.
-"""
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -26,7 +21,6 @@ class IFRS2App:
         st.set_page_config(page_title="Icarus Valuation", layout="wide", page_icon="🛡️")
         st.title("🛡️ Icarus: Valuation IFRS 2 (Table View)")
         
-        # --- Inicialização de Estado ---
         if 'analysis_result' not in st.session_state:
             st.session_state['analysis_result'] = None
         if 'full_context_text' not in st.session_state:
@@ -36,10 +30,8 @@ class IFRS2App:
         if 'mc_code' not in st.session_state:
             st.session_state['mc_code'] = ""
 
-        # --- SIDEBAR ---
         with st.sidebar:
             st.header("1. Documentação")
-            
             if "GEMINI_API_KEY" in st.secrets:
                 gemini_key = st.secrets["GEMINI_API_KEY"]
                 st.success("🔑 API Key detectada")
@@ -54,9 +46,8 @@ class IFRS2App:
                 self._handle_analysis(uploaded_files, manual_text, gemini_key)
             
             st.divider()
-            st.caption("v.Release 1.4 - DI Table View")
+            st.caption("v.Release 1.5 - DI Fix")
 
-        # --- MAIN ---
         if st.session_state['analysis_result']:
             self._render_dashboard(
                 st.session_state['analysis_result'], 
@@ -66,14 +57,11 @@ class IFRS2App:
         else:
             self._render_empty_state()
 
-    # --- CALLBACKS DE ESTADO ---
     def _update_widget_state(self, key_val: str, key_widget: str, value: float):
-        """Atualiza o estado antes do rerun para evitar conflito de widget."""
         st.session_state[key_val] = value
         st.session_state[key_widget] = value
         st.toast(f"Valor aplicado: {value:.4f}", icon="✅")
 
-    # --- LOGICA DE RENDERIZAÇÃO ---
     def _render_empty_state(self):
         st.info("👈 Faça o upload do contrato para iniciar.")
         st.markdown("### Icarus Valuation\nFerramenta para precificação de opções (IFRS 2) com IA.")
@@ -108,7 +96,6 @@ class IFRS2App:
                 st.session_state['tranches'] = [Tranche(1.0, 1.0, analysis.option_life_years)]
 
     def _render_dashboard(self, analysis: PlanAnalysisResult, full_text: str, api_key: str):
-        # 1. Diagnóstico
         st.subheader("2. Diagnóstico")
         with st.container():
             c1, c2 = st.columns(2)
@@ -125,7 +112,6 @@ class IFRS2App:
 
         st.divider()
 
-        # 2. Premissas Globais
         st.subheader("3. Premissas de Mercado")
         c1, c2, c3, c4 = st.columns(4)
         S = c1.number_input("Spot (R$)", 0.0, 10000.0, 50.0)
@@ -138,7 +124,6 @@ class IFRS2App:
 
         st.divider()
 
-        # 3. Renderização Específica por Modelo
         st.subheader("4. Configuração e Cálculo")
         
         if active_model == PricingModelType.MONTE_CARLO:
@@ -149,8 +134,6 @@ class IFRS2App:
             self._render_graded(S, K, q, analysis) 
         elif active_model == PricingModelType.RSU:
             self._render_rsu(S, q, analysis)
-
-    # --- RENDERIZADORES ESPECÍFICOS ---
 
     def _render_binomial_graded(self, S, K, q, analysis):
         st.info("ℹ️ Modelo Binomial: Permite exercício antecipado, turnover e indexação de strike.")
@@ -173,7 +156,7 @@ class IFRS2App:
                     self._render_vol_widget(i, "bi")
                     
                 with col_rate:
-                    self._render_rate_widget_table(i, "bi", t_exp) # NOVA VERSÃO TABELA
+                    self._render_rate_widget_table(i, "bi", t_exp)
 
                 st.markdown("👇 *Parâmetros Avançados*")
                 c_adv1, c_adv2, c_adv3, c_adv4 = st.columns(4)
@@ -236,7 +219,7 @@ class IFRS2App:
                 with c2:
                     self._render_vol_widget(i, "bs")
                 with c3:
-                    self._render_rate_widget_table(i, "bs", t_exp) # NOVA VERSÃO TABELA
+                    self._render_rate_widget_table(i, "bs", t_exp)
 
                 key_vol = f"vol_val_bs_{i}"
                 key_rate = f"rate_val_bs_{i}"
@@ -278,8 +261,6 @@ class IFRS2App:
         if st.button("Calcular (RSU)", type="primary"):
             self._execute_calc(inputs, PricingModelType.RSU)
 
-    # --- WIDGETS REUTILIZÁVEIS ---
-    
     def _render_vol_widget(self, i, prefix):
         st.markdown("Volatilidade (%)")
         c_in, c_pop = st.columns([0.85, 0.15])
@@ -317,7 +298,7 @@ class IFRS2App:
 
     def _render_rate_widget_table(self, i, prefix, t_years):
         """
-        WIDGET DE DI OTIMIZADO: Tabela Limpa (01/2026) e Correção de Erros UI.
+        WIDGET DE DI OTIMIZADO: Callbacks Seguros + Tabela Limpa.
         """
         st.markdown("Taxa DI (%)")
         c_in, c_pop = st.columns([0.85, 0.15])
@@ -328,7 +309,7 @@ class IFRS2App:
         if key_val not in st.session_state: 
             st.session_state[key_val] = 10.75
         
-        # Sincroniza Input
+        # Sincroniza visual com estado
         current_pct = st.session_state[key_val] * 100
         val = c_in.number_input(
             "Rate", 
@@ -339,7 +320,7 @@ class IFRS2App:
             format="%.2f"
         )
         
-        # Atualiza state
+        # Atualiza se input manual mudar
         new_decimal = val / 100.0
         if abs(new_decimal - st.session_state[key_val]) > 1e-6:
              st.session_state[key_val] = new_decimal
@@ -364,15 +345,13 @@ class IFRS2App:
             if k_df in st.session_state and not st.session_state[k_df].empty:
                 df = st.session_state[k_df]
                 
-                # --- VISUALIZAÇÃO LIMPA ---
+                # VISUALIZAÇÃO
                 df_show = df.copy()
                 df_show['Taxa (%)'] = (df_show['Taxa'] * 100).map('{:.2f}'.format)
                 
-                # Usa Vencimento_Fmt (01/2026) se disponível
                 col_venc = 'Vencimento_Fmt' if 'Vencimento_Fmt' in df.columns else 'Vencimento_Str'
                 
                 st.caption("Taxas Disponíveis:")
-                # Exibe APENAS Vencimento e Taxa
                 st.dataframe(
                     df_show[[col_venc, 'Taxa (%)']].rename(columns={col_venc: 'Vencimento'}), 
                     use_container_width=True, 
@@ -416,7 +395,6 @@ class IFRS2App:
             elif k_df in st.session_state:
                 st.error("Nenhum dado encontrado para esta data.")
 
-    # --- EXECUÇÃO ---
     def _run_custom_code(self, code):
         old_stdout = io.StringIO()
         sys.stdout = old_stdout
