@@ -86,9 +86,10 @@ class DocumentService:
         Extraia os parâmetros para precificação de opções.
         SAÍDA JSON (ESTRITA):
         {{
-            "program_summary": "Resumo executivo do programa: Quem recebe, qual o objetivo, quantidade total de instrumentos e regras de desligamento (Bad/Good leaver) de forma resumida.",
-            "deep_rationale": "Justificativa técnica alinhada à filosofia de parcimônia. Se for RSU, explique que é devido à ausência de opcionalidade (Strike Zero).",
-            "summary": "Resumo geral.",
+            "program_summary": "Resumo executivo do programa: Quem recebe, qual o objetivo, quantidade total de instrumentos e regras de desligamento (Bad/Good leaver).",
+            "valuation_params": "Resumo dos parâmetros quantitativos: Vesting, Lock-up, Dividendos, Correção de Strike e Liquidação.",
+            "deep_rationale": "Justificativa técnica...",
+            "summary": "Resumo geral curto.",
             "model_data": {{
                 "recommended_model": "RSU" | "Binomial" | "Black-Scholes" | "Monte Carlo",
                 "deep_rationale": "Justificativa técnica alinhada à filosofia de parcimônia. Se for RSU, explique que é devido à ausência de opcionalidade (Strike Zero).",
@@ -159,7 +160,10 @@ class DocumentService:
             except: return default
 
         return PlanAnalysisResult(
+            return PlanAnalysisResult(
             summary=data.get('summary', ''),
+            program_summary=data.get('program_summary', 'Resumo do programa não identificado.'), # <--- NOVO
+            valuation_params=data.get('valuation_params', 'Parâmetros não identificados.'),      # <--- NOVO
             contract_features=data.get('contract_features', ''),
             methodology_rationale=model_data.get('deep_rationale', ''),
             model_recommended=model_enum,
