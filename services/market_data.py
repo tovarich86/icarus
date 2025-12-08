@@ -2,8 +2,9 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from arch import arch_model
-from datetime import date, datetime
-from typing import List, Dict, Optional, Union
+from datetime import date, datetime, timedelta
+# CORREÇÃO AQUI: Adicionado 'Any' na importação
+from typing import List, Dict, Optional, Union, Any
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
@@ -38,7 +39,6 @@ class MarketDataService:
         for ticker_raw in tickers:
             ticker = ticker_raw.strip().upper()
             # Adiciona sufixo .SA se for numérico (ex: VALE3 -> VALE3.SA)
-            # Evita adicionar em tickers internacionais (ex: AAPL)
             if not ticker.endswith(".SA") and any(char.isdigit() for char in ticker):
                 ticker += ".SA"
             
@@ -56,7 +56,6 @@ class MarketDataService:
                     adj_close = adj_close.iloc[:, 0]
                 
                 # Cálculo de Retornos Logarítmicos
-                # log(Pt / Pt-1) é mais preciso para séries temporais financeiras
                 returns = np.log(adj_close / adj_close.shift(1)).dropna()
                 
                 if len(returns) < 30:
@@ -113,7 +112,6 @@ class MarketDataService:
         Busca a curva de juros (DI x Pré) da B3 para uma data específica.
         URL dinâmica baseada na data de referência.
         """
-        # Formatação da URL conforme padrão B3 (Data=dd/mm/aaaa & Data1=yyyymmdd)
         d_str = reference_date.strftime('%d/%m/%Y')
         d1_str = reference_date.strftime('%Y%m%d')
         
@@ -129,7 +127,6 @@ class MarketDataService:
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-dev-shm-usage")
             
-            # Instalação automática do driver (cacheado pelo manager)
             service = Service(ChromeDriverManager().install())
             driver = webdriver.Chrome(service=service, options=options)
             
@@ -139,11 +136,9 @@ class MarketDataService:
             
             soup = BeautifulSoup(html, 'html.parser')
             
-            # Validação se a tabela existe (pode não haver pregão no dia)
-            # A B3 às vezes retorna uma msg de erro dentro de uma div específica, mas a ausência da tabela já indica falha.
             tabela = soup.find('table', id='tb_principal1')
             if not tabela:
-                return pd.DataFrame() # Retorna vazio indicando falha/feriado
+                return pd.DataFrame()
             
             dados = []
             for linha in tabela.find('tbody').find_all('tr'):
@@ -151,10 +146,7 @@ class MarketDataService:
                 if len(cols) == 3:
                     try:
                         dias = int(cols[0].get_text(strip=True))
-                        # A taxa vem como "10,75", converter para float 0.1075
                         taxa = float(cols[1].get_text(strip=True).replace(',', '.')) / 100
-                        
-                        # Cálculo de anos (Duration aproximada)
                         anos = dias / 252
                         dados.append({'dias': dias, 'anos': anos, 'taxa': taxa})
                     except:
@@ -163,7 +155,8 @@ class MarketDataService:
             return pd.DataFrame(dados).sort_values('dias')
 
         except Exception as e:
-            st.error(f"Erro Selenium: {str(e)}")
+            # Em caso de erro no Selenium, não quebra a app, apenas loga e retorna vazio
+            print(f"Erro Selenium: {str(e)}")
             return pd.DataFrame()
         finally:
             if driver:
@@ -176,11 +169,9 @@ class MarketDataService:
         """
         if curve_df.empty: return 0.1075 # Fallback
         
-        # Extrapolação Flat (mantém a taxa da ponta se estiver fora da curva)
         if target_years <= curve_df['anos'].min():
             return curve_df.iloc[0]['taxa']
         if target_years >= curve_df['anos'].max():
             return curve_df.iloc[-1]['taxa']
             
-        # Interpolação Linear (NumPy)
         return float(np.interp(target_years, curve_df['anos'], curve_df['taxa']))
