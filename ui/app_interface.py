@@ -173,7 +173,7 @@ class IFRS2App:
                     "TrancheID": i+1, "S": S, "K": K, "q": q,
                     "T": t_exp, "Vesting": t_vest, "Prop": t_prop,
                     "Vol": st.session_state.get(key_vol, 0.30),
-                    "r": st.session_state.get(key_rate, 0.1075),
+                    "r": st.session_state.get(key_rate, 0.001075),
                     "Turnover": t_turnover, "M": t_m, 
                     "StrikeCorr": t_strike_corr, "Lockup": t_lock
                 })
@@ -228,7 +228,7 @@ class IFRS2App:
                     "TrancheID": i+1, "S": S, "K": K, "q": q,
                     "T": t_exp, "Prop": t_prop,
                     "Vol": st.session_state.get(key_vol, 0.30),
-                    "r": st.session_state.get(key_rate, 0.1075)
+                    "r": st.session_state.get(key_rate, 0.001075)
                 })
 
         if st.button("Calcular (Black-Scholes)", type="primary"):
