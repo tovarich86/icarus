@@ -1,6 +1,6 @@
 """
 Módulo de Motores Financeiros (Engines).
-Otimizado com Numba para alta performance em simulações iterativas.
+Otimizado com Numba para alta performance em simulações iterativas (Binomial/Lattice).
 """
 import numpy as np
 import math
@@ -16,18 +16,19 @@ def _numba_norm_cdf(x):
 
 @jit(nopython=True, fastmath=True)
 def _calculate_lockup_discount_numba(volatility, lockup_time, stock_price, q):
-    """Cálculo do desconto de iliquidez (Chaffe) otimizado."""
+    """
+    Cálculo do desconto de iliquidez (Chaffe) otimizado.
+    Modelo: Put Option Europeia Lookback (aproximação Chaffe para restrição de venda).
+    """
     if lockup_time <= EPSILON:
         return 0.0
     
     vol_sq_t = (volatility ** 2) * lockup_time
-    # Expansão de Taylor ou verificação de segurança para números pequenos/grandes
     term_inner = 2 * (np.exp(vol_sq_t) - vol_sq_t - 1)
     
     if term_inner <= EPSILON: 
         return 0.0
     
-    # Evita log de número negativo/zero
     val_log = np.exp(vol_sq_t) - 1
     if val_log <= EPSILON:
         return 0.0
@@ -37,30 +38,45 @@ def _calculate_lockup_discount_numba(volatility, lockup_time, stock_price, q):
         return 0.0
     
     a = np.sqrt(b)
-    # Usa a função interna compatível com Numba
     discount_val = stock_price * np.exp(-q * lockup_time) * (_numba_norm_cdf(a / 2) - _numba_norm_cdf(-a / 2))
     return discount_val
 
 class FinancialMath:
     """
     Coleção de métodos estáticos para cálculos de engenharia financeira.
+    Centraliza a lógica matemática utilizada pelos modelos da UI.
     """
+
+    @staticmethod
+    def calculate_lockup_discount(volatility, lockup_time, stock_price, q=0.0):
+        """
+        Wrapper público para o cálculo de desconto de iliquidez (Chaffe).
+        Usado principalmente no modelo de RSU.
+        """
+        # Garante tipos float para o Numba
+        return _calculate_lockup_discount_numba(
+            float(volatility), 
+            float(lockup_time), 
+            float(stock_price), 
+            float(q)
+        )
 
     @staticmethod
     def bs_call(S, K, T, r, sigma, q=0.0):
         """
-        Calcula Black-Scholes com tratamento robusto de bordas (Python puro/Numpy).
+        Calcula Black-Scholes Vanilla para uma Call Option.
+        Utilizado no modelo 'Graded Vesting' onde cada tranche é uma opção.
         """
         # 1. Tratamento de Tempo
         if T <= EPSILON:
             return max(S - K, 0.0)
         
-        # 2. Tratamento de Volatilidade Zero (Intrínseco Descontado)
+        # 2. Tratamento de Volatilidade Zero
         if sigma <= EPSILON:
             val = (S * np.exp(-q * T)) - (K * np.exp(-r * T))
             return max(val, 0.0)
             
-        # 3. Tratamento de Strike Zero (RSU)
+        # 3. Tratamento de Strike Zero (RSU Simples)
         if K <= EPSILON:
             return S * np.exp(-q * T)
             
@@ -73,9 +89,7 @@ class FinancialMath:
             d1 = (np.log(S / K) + (r - q + 0.5 * sigma ** 2) * T) / (sigma * sqrt_T)
             d2 = d1 - sigma * sqrt_T
             
-            # Usa scipy apenas aqui se não estiver usando numba total, 
-            # mas para consistência poderíamos usar _numba_norm_cdf se convertêssemos tudo.
-            # Mantendo numpy padrão para compatibilidade com código legado não-compilado.
+            # Importação local para não conflitar com Numba no resto do arquivo
             from scipy.stats import norm
             return S * np.exp(-q * T) * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
         except Exception:
@@ -89,18 +103,22 @@ class FinancialMath:
         T_years, inflacao_anual, lockup_years, tipo_exercicio=0
     ):
         """
-        Modelo Binomial Vetorizado e Compilado (Numba).
-        Completa a lógica de indução retroativa (Backward Induction).
+        Modelo Binomial (Lattice) Vetorizado e Compilado.
+        
+        Parâmetros Críticos:
+        - vesting_years: Período de carência (Serviço). Define a barreira de Forfeiture.
+        - T_years: Vencimento contratual (Life). Define o tamanho da árvore.
+        - turnover_w: Taxa de saída anual (hazard rate).
         """
         # --- Configuração da Grade ---
-        # Garante steps mínimos e máximos para estabilidade
-        total_steps = int(T_years * 252)
-        if total_steps > 2500: total_steps = 2500
-        if total_steps < 50: total_steps = 50 # Aumentei o mínimo para precisão
+        # Garante steps suficientes para convergência
+        total_steps = int(T_years * 252) # Base diária
+        if total_steps > 2000: total_steps = 2000 # Cap para performance
+        if total_steps < 50: total_steps = 50
         
         dt = T_years / total_steps
         
-        # Índice de Vesting
+        # Índice do nó onde o Vesting ocorre
         Nv = int(vesting_years / dt)
         
         # Parâmetros CRR (Cox-Ross-Rubinstein)
@@ -108,57 +126,44 @@ class FinancialMath:
         d = 1.0 / u
         p = (np.exp((r - q) * dt) - d) / (u - d)
         
-        # Probabilidades de Turnover
-        # Se total_steps > Nv, diluímos a probabilidade de saída nos passos pós-vesting
-        # Se turnover_w é taxa anual (hazard rate):
+        # Probabilidades de Turnover (por step)
         prob_ficar = np.exp(-turnover_w * dt)
         prob_sair = 1.0 - prob_ficar
 
         # --- 1. Estado Final (Vencimento) ---
-        # Vetorização: Cria todos os nós finais de uma vez
         j_idx = np.arange(total_steps + 1)
-        # S_T = S * u^(N-j) * d^j
         ST = S * (u ** (total_steps - j_idx)) * (d ** j_idx)
         
-        # Strike Ajustado pela inflação até o final
+        # Strike ajustado (se houver inflação projetada no strike)
         K_final = K * ((1 + inflacao_anual)**T_years)
         
-        # Payoff no vencimento
+        # Payoff no vencimento com desconto de Lock-up (se aplicável ao exercício no final)
         vals_base = ST.copy()
-        
-        # Aplica Lock-up no vencimento se necessário
         if lockup_years > 0:
-            # Loop manual para Numba (ou vetorizado se a função suportar)
             for i in range(len(vals_base)):
                 disc = _calculate_lockup_discount_numba(vol, lockup_years, vals_base[i], q)
                 vals_base[i] -= disc
         
-        # Payoff Básico: Max(S - K, 0)
         payoffs = np.maximum(vals_base - K_final, 0.0)
         
-        # Aplica Barreira (Hurdle) no vencimento
+        # Barreira de Performance (Hurdle) checada no vencimento
         option_values = np.where(ST >= hurdle_H, payoffs, 0.0)
         
         # --- 2. Indução Retroativa (Backward Induction) ---
-        # Itera do penúltimo passo até 0
         for i in range(total_steps - 1, -1, -1):
-            # Recalcula Strike para o tempo i (Inflação)
             time_elapsed = i * dt
             K_curr = K * ((1 + inflacao_anual)**time_elapsed)
             
-            # Valor de "Esperar" (Hold Value) - Valor presente esperado dos nós futuros
-            # option_values tem tamanho i+2, queremos tamanho i+1
-            # Vetorização: [0...N-1] e [1...N]
+            # Valor de Continuação (Hold)
             hold_values = np.exp(-r * dt) * (p * option_values[:-1] + (1 - p) * option_values[1:])
             
-            # Preço do Ativo neste nó (reconstrução otimizada)
-            # S_node = S * u^(i-j) * d^j
+            # Preço do Spot no nó atual
             j_grid = np.arange(i + 1)
             S_node = S * (u ** (i - j_grid)) * (d ** j_grid)
             
-            # Lógica Pós-Vesting (Exercício permitido dependendo do tipo)
+            # --- Lógica Pós-Vesting (i >= Nv) ---
             if i >= Nv:
-                # Valor se exercer agora (considerando Lockup)
+                # Valor se Exercer Agora (considerando Lockup)
                 S_exerc = S_node.copy()
                 if lockup_years > 0:
                     for k in range(len(S_exerc)):
@@ -166,34 +171,31 @@ class FinancialMath:
                 
                 intrinsic_value = np.maximum(S_exerc - K_curr, 0.0)
                 
-                # Regra de Exercício Antecipado Subótimo (Múltiplo M)
-                # Se S >= M * K, o empregado exerce (Force Exercise)
+                # Exercício Antecipado Subótimo (Múltiplo M)
+                # Se Spot > M * Strike, funcionário exerce irracionalmente (liquidez)
                 force_exercise_mask = (S_node >= (multiple_M * K_curr)) & (tipo_exercicio == 0)
                 
-                # Valor considerando Turnover
-                # Se sair (prob_sair), assume-se exercício imediato (se ITM) ou perda (se OTM/Bad Leaver).
-                # Aqui assumimos simplificação: Saída = Exercício Antecipado
+                # Turnover Pós-Vesting: Assumimos que sair = exercer antecipado (se ITM)
+                # (Ou perde se for OTM, mas intrinsic_value cuida disso)
                 value_node = (prob_sair * intrinsic_value) + (prob_ficar * hold_values)
                 
-                # Se forçado pelo Múltiplo M, prevalece o exercício
-                # Se Americano (tipo=0) e racionalmente melhor exercer, exerce (max)
+                # Decide entre exercer (racional/forçado) ou esperar
+                # Americano (tipo=0)
                 if tipo_exercicio == 0:
                     rational_exercise = np.maximum(value_node, intrinsic_value)
                     final_node_val = np.where(force_exercise_mask, intrinsic_value, rational_exercise)
                 else:
-                    # Europeu
+                    # Europeu (só exerce no fim, mas sofre turnover)
                     final_node_val = value_node
 
-                # Aplica Hurdle (Barreira de Performance)
-                # Se S < Hurdle, opção não vale nada ou apenas expectativa (hold)? 
-                # Geralmente se S < Hurdle no vesting, perde. Se for só no exercício, checa aqui.
-                # Assumindo Hurdle de Vesting:
+                # Aplica Hurdle se definido
                 hurdle_mask = (S_node >= hurdle_H)
                 option_values = np.where(hurdle_mask, final_node_val, prob_ficar * hold_values)
             
+            # --- Lógica Pré-Vesting (i < Nv) ---
             else:
-                # Pré-Vesting: Não pode exercer. Apenas desconta pelo risco de turnover.
-                # Se sair antes do vesting, valor = 0 (Forfeiture).
+                # Não pode exercer.
+                # Se sair (Turnover), valor = 0 (Forfeiture Condition do IFRS 2)
                 option_values = prob_ficar * hold_values
         
         return option_values[0]
