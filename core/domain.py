@@ -1,28 +1,17 @@
 """
 Módulo de Domínio (Core).
 
-Este módulo define as estruturas de dados fundamentais e enumeradores utilizados
-em todo o sistema Icarus. Ele atua como a fonte única da verdade para os tipos
-de dados, garantindo consistência entre a camada de Interface, Serviços e Engines Matemáticas.
-
-Não deve conter lógica de negócios complexa ou dependências de bibliotecas externas
-pesadas (como Streamlit ou Google Generative AI).
+Define as estruturas de dados fundamentais e enumeradores utilizados em todo o sistema Icarus.
+Focado em conformidade com IFRS 2 (CPC 10) para remensuração e classificação correta.
 """
 
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 class PricingModelType(Enum):
     """
-    Enumeração dos modelos de precificação de opções suportados pelo sistema.
-    
-    Attributes:
-        MONTE_CARLO: Simulação estocástica, ideal para path-dependency (barreiras, performance).
-        BINOMIAL: Modelo Lattice (árvore), ideal para exercício antecipado (Americanas) e lock-up.
-        BLACK_SCHOLES_GRADED: Modelo fechado padrão, aplicado por tranche individual.
-        RSU: Restricted Stock Units / Matching Shares (Strike Zero ou irrelevante).
-        UNDEFINED: Estado inicial ou erro de identificação.
+    Enumeração dos modelos de precificação de opções suportados.
     """
     MONTE_CARLO = "Monte Carlo (Simulação)"
     BINOMIAL = "Binomial (Lattice Customizado)"
@@ -30,46 +19,40 @@ class PricingModelType(Enum):
     RSU = "RSU / Ações Restritas (Matching Shares)"
     UNDEFINED = "Indefinido"
 
+class SettlementType(Enum):
+    """
+    Classificação Contábil do Instrumento (IFRS 2).
+    Define se o plano cria uma Reserva de Capital (Equity) ou um Passivo (Cash).
+    """
+    EQUITY_SETTLED = "Equity-Settled (Liquidação em Ações)"
+    CASH_SETTLED = "Cash-Settled (Liquidação em Caixa/SARs)"
+    HYBRID = "Híbrido (Opção de Liquidação)"
+    UNDEFINED = "Indefinido"
+
 @dataclass
 class Tranche:
     """
-    Representa uma tranche individual de um plano de vesting escalonado (Graded Vesting).
-
+    Representa uma tranche individual de vesting.
+    Permite distinguir o período de aquisição (Vesting) do prazo contratual total (Expiration).
+    
     Attributes:
-        vesting_date (float): O tempo até o vesting em anos (ex: 1.0, 2.5).
-        proportion (float): A proporção desta tranche em relação ao grant total (0.0 a 1.0).
-                            Ex: 0.25 representa 25% do total de opções outorgadas.
+        vesting_date (float): Anos até o direito ser adquirido (Carência).
+        proportion (float): % do total outorgado (0.0 a 1.0).
+        expiration_date (float): Anos até o vencimento do direito (Maturity/Life).
+                                 Geralmente > vesting_date.
+                                 Se None, assume-se igual ao option_life global.
+        custom_strike (Optional[float]): Strike específico desta tranche (se houver).
     """
     vesting_date: float
     proportion: float
+    expiration_date: Optional[float] = None
+    custom_strike: Optional[float] = None
 
 @dataclass
 class PlanAnalysisResult:
     """
-    Agregador de resultados da análise qualitativa e quantitativa de um plano de opções.
-    
-    Esta estrutura armazena tanto a interpretação textual feita pela IA quanto os
-    parâmetros numéricos extraídos para alimentação dos modelos matemáticos.
-
-    Attributes:
-        summary (str): Resumo executivo do plano.
-        program_summary: str # Resumo "Jurídico/RH" (Participante, quantidade, regras gerais)
-        valuation_params: str # Resumo "Quantitativo" (Carência, Dividendos, Lockup, Liquidação)
-        methodology_rationale (str): Justificativa técnica profunda para a escolha do modelo.
-        model_recommended (PricingModelType): O modelo matemático sugerido pela análise.
-        model_reason (str): Justificativa curta/sintética (para UI).
-        model_comparison (str): Texto comparativo entre o modelo escolhido e alternativas.
-        pros (List[str]): Lista de pontos fortes da metodologia escolhida.
-        cons (List[str]): Lista de limitações ou complexidades da metodologia.
-        tranches (List[Tranche]): Cronograma de vesting identificado.
-        has_market_condition (bool): Se True, indica gatilhos de mercado (ex: TSR) -> Requer Monte Carlo.
-        has_strike_correction (bool): Se True, indica indexação do Strike (ex: IGPM/IPCA).
-        option_life_years (float): Prazo contratual total da opção (Life).
-        strike_price (float): Preço de exercício base.
-        strike_is_zero (bool): Flag crítica. Se True, trata-se de RSU/Matching Shares.
-        turnover_rate (float): Taxa anual esperada de saída de executivos (ex: 0.05 = 5%).
-        early_exercise_multiple (float): Fator de exercício subótimo (M). Geralmente 2.0x o Strike.
-        lockup_years (float): Período de restrição de venda pós-exercício (desconto de iliquidez).
+    Agregador de resultados da análise qualitativa e quantitativa.
+    Agora suporta classificação contábil para remensuração.
     """
     # Metadados Qualitativos
     summary: str
@@ -78,6 +61,7 @@ class PlanAnalysisResult:
     contract_features: str 
     methodology_rationale: str 
     model_recommended: PricingModelType
+    settlement_type: SettlementType  # NOVO: Define necessidade de remensuração
     model_reason: str
     model_comparison: str 
     pros: List[str]
@@ -87,7 +71,9 @@ class PlanAnalysisResult:
     tranches: List[Tranche] = field(default_factory=list)
     has_market_condition: bool = False 
     has_strike_correction: bool = False 
-    option_life_years: float = 5.0 
+    
+    # Parâmetros Globais (Defaults)
+    option_life_years: float = 5.0  # Prazo contratual padrão
     strike_price: float = 0.0
     strike_is_zero: bool = False
     turnover_rate: float = 0.0 
@@ -95,15 +81,11 @@ class PlanAnalysisResult:
     lockup_years: float = 0.0 
     
     def get_avg_vesting(self) -> float:
-        """
-        Calcula o prazo médio ponderado de vesting (Weighted Average Vesting Period).
-        
-        Utilizado para estimativas rápidas de gap de exercício. Caso não haja tranches
-        definidas, retorna um valor padrão de 3.0 anos.
-
-        Returns:
-            float: A média ponderada dos anos de vesting.
-        """
+        """Calcula o prazo médio ponderado de vesting."""
         if not self.tranches:
             return 3.0
         return sum(t.vesting_date * t.proportion for t in self.tranches)
+
+    def is_liability(self) -> bool:
+        """Helper para verificar se é Passivo (Exige remensuração)."""
+        return self.settlement_type in [SettlementType.CASH_SETTLED, SettlementType.HYBRID]
