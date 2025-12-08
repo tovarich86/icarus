@@ -317,7 +317,8 @@ class IFRS2App:
 
     def _render_rate_widget_table(self, i, prefix, t_years):
         """
-        NOVO WIDGET DE DI: Exibe tabela completa e permite seleção.
+        WIDGET DE DI OTIMIZADO: Tabela Interativa e Seleção Manual.
+        Integração com lógica B3 (Sistema Pregão).
         """
         st.markdown("Taxa DI (%)")
         c_in, c_pop = st.columns([0.85, 0.15])
@@ -325,69 +326,87 @@ class IFRS2App:
         key_val = f"rate_val_{prefix}_{i}"
         key_w = f"rate_w_{prefix}_{i}"
         
-        if key_val not in st.session_state: st.session_state[key_val] = 10.75
+        # Valor padrão seguro
+        if key_val not in st.session_state: 
+            st.session_state[key_val] = 10.75
         
-        val = c_in.number_input("Rate", value=st.session_state[key_val], key=key_w, label_visibility="collapsed", step=0.1)
-        st.session_state[key_val] = val
+        # Input principal (Exibe valor atual, convertido para % para visualização)
+        val = c_in.number_input(
+            "Rate", 
+            value=float(st.session_state[key_val] * 100) if st.session_state[key_val] < 1.0 else float(st.session_state[key_val]), 
+            key=key_w, 
+            label_visibility="collapsed", 
+            step=0.1,
+            format="%.2f"
+        )
+        # Salva sempre em decimal no estado para os cálculos
+        st.session_state[key_val] = val / 100.0 if val > 0.50 else val
         
         with c_pop.popover("📉"):
-            st.markdown("###### Curva DI (B3)")
+            st.markdown("###### Consulta DI Futuro (B3)")
             d_base = st.date_input("Data Base", date.today(), key=f"db_{prefix}_{i}")
             
             # Key para armazenar o DataFrame da curva
             k_df = f"df_di_{prefix}_{i}"
             
-            if st.button("Carregar Tabela DI", key=f"b_load_di_{prefix}_{i}"):
-                with st.spinner("Buscando B3..."):
+            # Botão de carga
+            if st.button("Buscar Taxas", key=f"b_load_di_{prefix}_{i}"):
+                with st.spinner("Consultando B3..."):
                     df = MarketDataService.get_di_data_b3(d_base)
                     st.session_state[k_df] = df
             
-            if k_df in st.session_state:
+            # Exibição dos dados se existirem
+            if k_df in st.session_state and not st.session_state[k_df].empty:
                 df = st.session_state[k_df]
                 
-                if not df.empty:
-                    # 1. Exibe a tabela (Top 10 ou Scroll)
-                    st.dataframe(
-                        df[['Vencimento_Str', 'Dias_Corridos', 'Taxa']], 
-                        use_container_width=True, 
-                        height=200,
-                        hide_index=True
-                    )
+                # Formatação visual para a tabela (Cria cópia para não alterar dados brutos)
+                df_show = df.copy()
+                df_show['Taxa (%)'] = (df_show['Taxa'] * 100).map('{:.2f}'.format)
+                df_show['Vencimento'] = df_show['Vencimento_Str']
+                
+                st.caption("Amostra de Dados:")
+                st.dataframe(
+                    df_show[['Vencimento', 'Dias_Corridos', 'Taxa (%)']], 
+                    use_container_width=True, 
+                    height=200,
+                    hide_index=True
+                )
+                
+                # --- Lógica de Seleção ---
+                # Cria label amigável: "JAN/26 - 12.50%"
+                df['Label'] = df.apply(
+                    lambda x: f"{x['Vencimento_Str']} - {x['Taxa']*100:.2f}%", 
+                    axis=1
+                )
+                
+                # Sugestão Automática (Vértice mais próximo do 't_years' da tranche)
+                target_days = t_years * 365
+                idx_closest = (df['Dias_Corridos'] - target_days).abs().idxmin()
+                
+                st.markdown("**Selecione o Vencimento:**")
+                
+                # Selectbox com label customizada
+                selected_label = st.selectbox(
+                    "Vencimento", 
+                    options=df['Label'],
+                    index=int(idx_closest), # Pré-seleciona o sugerido
+                    key=f"sel_di_{prefix}_{i}",
+                    label_visibility="collapsed"
+                )
+                
+                if selected_label:
+                    # Extrai a taxa da linha selecionada
+                    row = df[df['Label'] == selected_label].iloc[0]
+                    sel_taxa_pct = row['Taxa'] * 100
                     
-                    # 2. Prepara Opções para o Selectbox
-                    # Cria uma coluna formatada para o usuário escolher
-                    df['Option_Label'] = df.apply(
-                        lambda x: f"{x['Vencimento_Str']} ({x['Dias_Corridos']}d) - {x['Taxa']*100:.2f}%", 
-                        axis=1
-                    )
-                    
-                    # 3. Sugestão Automática (Closest Vertex)
-                    # Encontra o índice da opção mais próxima de t_years
-                    target_days = t_years * 365
-                    idx_closest = (df['Dias_Corridos'] - target_days).abs().idxmin()
-                    
-                    # 4. Selectbox
-                    selected_label = st.selectbox(
-                        "Selecione o Vértice:", 
-                        options=df['Option_Label'],
-                        index=int(idx_closest), # Pré-seleciona o sugerido
-                        key=f"sel_di_{prefix}_{i}"
-                    )
-                    
-                    # Extrai a taxa da string selecionada ou busca no df
-                    selected_row = df[df['Option_Label'] == selected_label].iloc[0]
-                    sel_taxa = selected_row['Taxa'] * 100
-                    
-                    # 5. Botão Aplicar
-                    st.button(
-                        f"Aplicar {sel_taxa:.2f}%", 
-                        key=f"b_apply_di_{prefix}_{i}",
-                        on_click=self._update_widget_state,
-                        args=(key_val, key_w, sel_taxa)
-                    )
-                    
-                else:
-                    st.warning("Nenhum dado encontrado para esta data.")
+                    if st.button(f"Usar {selected_label}", key=f"b_apply_di_{prefix}_{i}"):
+                        # Atualiza o estado e a input box externa
+                        st.session_state[key_val] = row['Taxa'] # Decimal
+                        st.session_state[key_w] = sel_taxa_pct # Percentual (Visual)
+                        st.rerun()
+            
+            elif k_df in st.session_state:
+                st.error("Nenhum dado encontrado para esta data (Feriado ou Fim de Semana?).")
 
     # --- EXECUÇÃO ---
     def _run_custom_code(self, code):
