@@ -1,11 +1,6 @@
 """
 Serviço de Integração com IA e Processamento de Documentos.
-
-Responsável por:
-1. Extrair texto de arquivos (PDF/DOCX).
-2. Comunicar com a API do Google Gemini.
-3. Gerar estruturas de dados (PlanAnalysisResult) com foco em IFRS 2 / CPC 10.
-4. Classificar instrumentos (Equity vs Cash) e extrair prazos de vencimento distintos de vesting.
+Versão Corrigida: Tratamento robusto de erros JSON e parser tolerante.
 """
 
 import json
@@ -32,6 +27,7 @@ from core.domain import PlanAnalysisResult, Tranche, PricingModelType, Settlemen
 class DocumentService:
     """
     Fachada para serviços de leitura de documentos e geração via LLM.
+    Inclui tratamento robusto para falhas de geração de JSON.
     """
 
     @staticmethod
@@ -61,11 +57,22 @@ class DocumentService:
         return text
 
     @staticmethod
+    def _sanitize_json_output(raw_text: str) -> str:
+        """
+        Limpa a saída do LLM para garantir que apenas o JSON seja processado.
+        Remove blocos de código markdown (```json ... ```).
+        """
+        # Remove marcadores de código Markdown
+        text = re.sub(r'```json\s*', '', raw_text)
+        text = re.sub(r'```\s*$', '', text)
+        return text.strip()
+
+    @staticmethod
     @st.cache_data(show_spinner=False)
     def analyze_plan_with_gemini(text: str, api_key: str) -> Optional[PlanAnalysisResult]:
         """
         Envia o texto do contrato para o Gemini e converte a resposta JSON
-        em um objeto tipado PlanAnalysisResult, focado em classificação contábil.
+        em um objeto tipado PlanAnalysisResult.
         """
         if not HAS_GEMINI or not api_key:
             return None
@@ -73,64 +80,43 @@ class DocumentService:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash')
         
-        # Prompt Otimizado para IFRS 2 / CPC 10 e Classificação Contábil
+        # Prompt Reforçado para evitar erros de sintaxe JSON
         prompt = f"""
-        Você é um Consultor Sênior em Remuneração Executiva e Especialista em IFRS 2 (CPC 10).
-        Sua tarefa é analisar o contrato fornecido e gerar um JSON estruturado para precificação e contabilização.
+        Você é um Especialista em IFRS 2 (CPC 10). Analise o contrato e gere um JSON para precificação.
 
-        DIRETRIZES DE FORMATAÇÃO (MUITO IMPORTANTE):
-        - Nos campos de texto ('program_summary', 'valuation_params'), use QUEBRAS DE LINHA DUPLAS (\\n\\n) entre cada tópico.
-        - Isso é essencial para que o texto seja renderizado corretamente em parágrafos separados.
-        - Use negrito (**Tópico:**) para os títulos de cada item.
+        ATENÇÃO CRÍTICA À FORMATAÇÃO JSON:
+        1. A saída deve ser APENAS um JSON válido.
+        2. NÃO use quebras de linha reais dentro das strings. Use o caractere de escape \\n literal.
+        3. Se houver aspas duplas " dentro de um texto, elas DEVEM ser escapadas como \\".
+        4. Verifique se todas as chaves e valores estão fechados corretamente.
 
-        DIRETRIZES DE ANÁLISE CRÍTICA (IFRS 2):
-        
-        1. **Classificação (Settlement Type):**
-           - **EQUITY_SETTLED:** Se o plano entrega AÇÕES reais da empresa.
-           - **CASH_SETTLED:** Se o plano paga em DINHEIRO baseado no valor da ação (Phantom Shares, SARs). Termos chave: "Liquidação Financeira", "Pagamento em Caixa".
-           - **HYBRID:** Se a empresa tem a opção de escolher como pagar.
-
-        2. **Dividendos na Carência (CRÍTICO):**
-           - Verifique se o participante recebe dividendos (ou equivalentes) sobre as opções/ações AINDA NÃO VESTIDAS.
-           - **Impacto:** Se NÃO receber (o mais comum), o modelo deve descontar o Dividend Yield esperado (input q > 0). Se RECEBER, não se desconta (q = 0).
-           - Explicite isso no campo 'valuation_params'.
-
-        3. **Prazos (Vesting vs Expiration):**
-           - **Vesting (Carência):** Período para ganhar o direito.
-           - **Expiration (Life):** Prazo máximo contratual para exercer.
-           - *Nota:* Frequentemente o vesting é curto (3-4 anos) mas o vencimento é longo (10 anos). Diferencie-os.
-
-        4. **Instrumento e Modelo:**
-           - Strike Zero -> RSU.
-           - Strike de Mercado -> Opção (Black-Scholes/Binomial).
-           - Gatilho de Performance (TSR) -> Monte Carlo.
+        DIRETRIZES TÉCNICAS:
+        - Classificação: EQUITY_SETTLED (Ações) vs CASH_SETTLED (Caixa/Phantom).
+        - Dividendos: Se o participante não recebe dividendos na carência, o modelo deve descontar o yield.
+        - Prazos: Diferencie Vesting (Carência) de Expiration (Vencimento total).
 
         TEXTO DO CONTRATO:
-        {text[:90000]}
+        {text[:80000]}
 
         SAÍDA JSON (ESTRITA):
         {{
-            "program_summary": "Resumo Markdown com quebras de linha duplas (\\n\\n). Ex: '**Instrumento:** RSU...\\n\\n**Vesting:** 3 anos...'",
-            
-            "valuation_params": "Resumo Markdown com quebras de linha duplas (\\n\\n). OBRIGATÓRIO incluir análise de Dividendos. Ex: '**1. Liquidação:** Caixa...\\n\\n**2. Dividendos:** Não recebe na carência (Descontar Yield)...\\n\\n**3. Life:** 10 anos...'",
-            
-            "summary": "Parágrafo curto geral.",
-            
-            "contract_features": "Lista curta das principais cláusulas.",
-            
+            "program_summary": "Resumo Markdown usando \\n\\n para parágrafos.",
+            "valuation_params": "Resumo técnico usando \\n\\n. Incluir análise de Dividendos na carência.",
+            "summary": "Resumo geral curto.",
+            "contract_features": "Principais cláusulas.",
             "model_data": {{
                 "recommended_model": "RSU" | "Binomial" | "Black-Scholes" | "Monte Carlo",
                 "settlement_type": "EQUITY_SETTLED" | "CASH_SETTLED" | "HYBRID",
-                "deep_rationale": "Justificativa técnica. Mencione Passivo se for Cash-Settled.",
-                "justification": "Frase curta para UI.",
+                "deep_rationale": "Justificativa técnica.",
+                "justification": "Frase curta.",
                 "comparison": "Comparação breve.",
                 "pros": ["Pró 1"], 
                 "cons": ["Contra 1"],
                 "params": {{
-                    "option_life": <float, Prazo TOTAL de vencimento do contrato em anos (ex: 10.0)>,
+                    "option_life": <float>,
                     "strike_price": <float>,
                     "strike_is_zero": <bool>,
-                    "dividends_during_vesting": <bool, true se recebe dividendos na carência>,
+                    "dividends_during_vesting": <bool>,
                     "turnover_rate": <float>,
                     "early_exercise_factor": <float>,
                     "lockup_years": <float>,
@@ -150,15 +136,25 @@ class DocumentService:
         
         try:
             response = model.generate_content(prompt)
-            clean_text = re.sub(r'```json|```', '', response.text).strip()
-            data = json.loads(clean_text)
+            
+            # 1. Sanitização
+            clean_text = DocumentService._sanitize_json_output(response.text)
+            
+            # 2. Parse Tolerante (strict=False permite quebras de linha dentro de strings)
+            data = json.loads(clean_text, strict=False)
             
             return DocumentService._map_json_to_domain(data)
             
+        except json.JSONDecodeError as e:
+            # Captura erros de parsing específicos e mostra o que a IA gerou para debug
+            st.error(f"⚠️ Erro de Sintaxe no JSON gerado pela IA: {e}")
+            with st.expander("Ver JSON Bruto (Debug)", expanded=False):
+                st.code(clean_text, language='json')
+            st.warning("Usando dados de exemplo (Mock) para não interromper o fluxo.")
+            return DocumentService.mock_analysis(text)
+            
         except Exception as e:
-            # DEBUG: Mostra o erro real na interface
-            st.error(f"⚠️ Erro na Análise IA: {str(e)}")
-            st.caption("O sistema está usando dados Mock (fictícios) devido ao erro acima.")
+            st.error(f"⚠️ Erro Geral na Análise IA: {str(e)}")
             return DocumentService.mock_analysis(text)
 
     @staticmethod
@@ -179,9 +175,9 @@ class DocumentService:
         if model_enum == PricingModelType.UNDEFINED and "BLACK" in rec_model_str:
             model_enum = PricingModelType.BLACK_SCHOLES_GRADED
 
-        # Mapeamento do Enum de Liquidação (Settlement)
+        # Mapeamento do Enum de Liquidação
         settlement_str = model_data.get('settlement_type', 'EQUITY_SETTLED').upper()
-        settlement_enum = SettlementType.EQUITY_SETTLED # Default seguro
+        settlement_enum = SettlementType.EQUITY_SETTLED 
         
         if "CASH" in settlement_str:
             settlement_enum = SettlementType.CASH_SETTLED
@@ -196,9 +192,8 @@ class DocumentService:
             try:
                 p_y = float(t.get('period_years', 0))
                 p_p = float(t.get('percentage', 0))
-                # Se expiration não vier na tranche, usa o global
                 p_exp = float(t.get('expiration_years', global_life))
-                if p_exp < p_y: p_exp = global_life # Correção de sanidade
+                if p_exp < p_y: p_exp = global_life 
                 
                 if p_y > 0: 
                     tranches.append(Tranche(vesting_date=p_y, proportion=p_p, expiration_date=p_exp))
@@ -255,18 +250,14 @@ class DocumentService:
         
         try:
             response = model.generate_content(prompt)
-            code = response.text
-            code = re.sub(r'^```python\s*', '', code)
-            code = re.sub(r'^```\s*', '', code)
-            code = re.sub(r'\s*```$', '', code)
-            return code.strip()
+            code = DocumentService._sanitize_json_output(response.text) # Reutiliza a limpeza
+            return code
         except Exception as e:
             return f"# Erro na geração de código: {e}"
 
     @staticmethod
     def mock_analysis(text: str) -> PlanAnalysisResult:
-        """Gera dados fictícios para demonstração (sem API Key)."""
-        # Mock de um plano de Phantom Shares (Cash Settled)
+        """Gera dados fictícios para demonstração (sem API Key ou em caso de erro)."""
         tranches = [
             Tranche(vesting_date=1.0, proportion=0.33, expiration_date=10.0),
             Tranche(vesting_date=2.0, proportion=0.33, expiration_date=10.0),
@@ -274,17 +265,17 @@ class DocumentService:
         ]
         
         return PlanAnalysisResult(
-            summary="[MOCK] Plano Phantom Shares: Liquidação em Caixa.",
-            program_summary="**Instrumento:** Phantom Shares (Direito de Valorização).\n\n**Liquidação:** Financeira (Cash-Settled) - Passivo Contábil.",
-            valuation_params="**1. Classificação:** Passivo (Remensurar a cada balanço).\n\n**2. Dividendos:** Não recebe na carência (Descontar Yield).\n\n**3. Life:** 10 anos.",
+            summary="[MOCK - ERRO NA IA] Plano Phantom Shares Simulados.",
+            program_summary="**Atenção:** Os dados abaixo são fictícios pois houve um erro na leitura do contrato pela IA.\n\n**Instrumento:** Phantom Shares.\n\n**Liquidação:** Financeira.",
+            valuation_params="**1. Status:** Dados de Fallback.\n\n**2. Dividendos:** Não recebe.\n\n**3. Life:** 10 anos.",
             contract_features="[MOCK] Vesting 3 anos, Life 10 anos, Pagamento em Dinheiro.",
-            methodology_rationale="[MOCK] Por ser liquidado em caixa (Phantom), deve ser tratado como passivo e remensurado a valor justo. Modelo Binomial recomendado se houver barreiras, ou BS Graded para casos simples.",
+            methodology_rationale="[MOCK] Ocorreu um erro técnico na geração do racional pela IA. O sistema carregou este modelo padrão para permitir que você continue o teste da ferramenta manualmente.",
             model_recommended=PricingModelType.BLACK_SCHOLES_GRADED,
-            settlement_type=SettlementType.CASH_SETTLED, # Mockando Cash Settled
-            model_reason="[MOCK] Phantom Shares = Cash Settled.",
-            model_comparison="[MOCK] Remensuração obrigatória.",
-            pros=["Flexibilidade para o funcionário"], 
-            cons=["Impacto no Caixa da empresa"],
+            settlement_type=SettlementType.CASH_SETTLED,
+            model_reason="[MOCK] Dados de contingência.",
+            model_comparison="[MOCK] Sem comparação disponível.",
+            pros=["Continuidade do teste"], 
+            cons=["Dados não reais"],
             tranches=tranches,
             has_strike_correction=False,
             option_life_years=10.0,
