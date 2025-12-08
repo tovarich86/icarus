@@ -46,7 +46,7 @@ class IFRS2App:
                 self._handle_analysis(uploaded_files, manual_text, gemini_key)
             
             st.divider()
-            st.caption("v.Release 1.5 - DI Fix")
+            st.caption("v.Release 1.6 - DI Fix & UI Clean")
 
         if st.session_state['analysis_result']:
             self._render_dashboard(
@@ -298,35 +298,29 @@ class IFRS2App:
 
     def _render_rate_widget_table(self, i, prefix, t_years):
         """
-        WIDGET DE DI OTIMIZADO: Correção de Conflito de Estado (Backing vs Widget).
+        WIDGET DE DI OTIMIZADO: Callbacks Seguros + Tabela Limpa + Fix Warnings.
         """
         st.markdown("Taxa DI (%)")
         c_in, c_pop = st.columns([0.85, 0.15])
         
-        # Chaves de Estado
-        key_val = f"rate_val_{prefix}_{i}"  # Valor Decimal (0.1490)
-        key_w = f"rate_w_{prefix}_{i}"      # Valor do Widget (14.90)
+        key_val = f"rate_val_{prefix}_{i}"
+        key_w = f"rate_w_{prefix}_{i}"
         
-        # Inicialização
         if key_val not in st.session_state: 
             st.session_state[key_val] = 10.75
         
-        # Lógica de Sincronização Bidirecional
-        # 1. Se o widget ainda não existe no state, inicializa com o valor decimal convertido
-        if key_w not in st.session_state:
-            st.session_state[key_w] = st.session_state[key_val] * 100.0
-
-        # 2. Renderiza o widget conectado à chave 'key_w'
+        # Sincroniza visual com estado
+        current_pct = st.session_state[key_val] * 100
         val = c_in.number_input(
             "Rate", 
+            value=float(current_pct), 
             key=key_w, 
             label_visibility="collapsed", 
             step=0.1,
             format="%.2f"
         )
         
-        # 3. Atualiza o decimal (key_val) baseado no que está no widget agora
-        # Isso garante que se o usuário digitou manualmente, o cálculo receba o valor
+        # Atualiza se input manual mudar
         new_decimal = val / 100.0
         if abs(new_decimal - st.session_state[key_val]) > 1e-6:
              st.session_state[key_val] = new_decimal
@@ -351,7 +345,7 @@ class IFRS2App:
             if k_df in st.session_state and not st.session_state[k_df].empty:
                 df = st.session_state[k_df]
                 
-                # Visualização
+                # VISUALIZAÇÃO
                 df_show = df.copy()
                 df_show['Taxa (%)'] = (df_show['Taxa'] * 100).map('{:.2f}'.format)
                 
@@ -360,12 +354,12 @@ class IFRS2App:
                 st.caption("Taxas Disponíveis:")
                 st.dataframe(
                     df_show[[col_venc, 'Taxa (%)']].rename(columns={col_venc: 'Vencimento'}), 
-                    use_container_width=True, 
+                    width='stretch',  # CORREÇÃO DO WARNING AQUI
                     height=200,
                     hide_index=True
                 )
                 
-                # Seletor
+                # SELETOR
                 df['Label'] = df.apply(
                     lambda x: f"{x[col_venc]} - {x['Taxa']*100:.2f}%", 
                     axis=1
@@ -383,11 +377,10 @@ class IFRS2App:
                     label_visibility="collapsed"
                 )
                 
-                # --- CALLBACK CORRIGIDO ---
-                # Atualiza TANTO o valor de cálculo QUANTO o valor visual do widget
+                # CALLBACK SEGURO (Atualiza decimal e visual)
                 def apply_callback(k_decimal, k_widget, taxa_decimal):
-                    st.session_state[k_decimal] = taxa_decimal       # Atualiza 0.1490
-                    st.session_state[k_widget] = taxa_decimal * 100.0 # Força o widget a mostrar 14.90
+                    st.session_state[k_decimal] = taxa_decimal
+                    st.session_state[k_widget] = taxa_decimal * 100.0
                 
                 if selected_label:
                     row = df[df['Label'] == selected_label].iloc[0]
@@ -397,7 +390,7 @@ class IFRS2App:
                         f"Usar {selected_label}", 
                         key=f"b_apply_di_{prefix}_{i}",
                         on_click=apply_callback,
-                        args=(key_val, key_w, sel_taxa) # Passamos as duas chaves agora
+                        args=(key_val, key_w, sel_taxa)
                     )
             
             elif k_df in st.session_state:
