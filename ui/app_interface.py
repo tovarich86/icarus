@@ -2,13 +2,7 @@
 Módulo de Interface do Usuário (UI).
 
 Responsável por renderizar os componentes visuais do Streamlit (botões, gráficos, inputs)
-e orquestrar o fluxo de interação do usuário. Este módulo atua como a camada 'View' e 'Controller',
-delegando a lógica pesada para 'services' e 'engines'.
-
-ATUALIZAÇÃO:
-- Layout do dashboard renovado para separar 'Resumo do Programa' (Jurídico/RH) de 
-  'Parâmetros de Valuation' (Quantitativo).
-- Melhor tratamento visual para a recomendação de modelos.
+e orquestrar o fluxo de interação do usuário.
 """
 
 import streamlit as st
@@ -129,13 +123,13 @@ class IFRS2App:
         
         with c1:
             st.markdown("##### 📄 Resumo do Programa")
-            # Usa getattr para compatibilidade caso o objeto analysis antigo (sem program_summary) seja usado
-            summary_text = getattr(analysis, 'program_summary', getattr(analysis, 'contract_features', analysis.summary))
-            st.info(summary_text)
+            # Tenta pegar os novos campos, com fallback seguro para versões antigas do objeto
+            prog_summary = getattr(analysis, 'program_summary', analysis.summary)
+            st.info(prog_summary)
 
         with c2:
             st.markdown("##### 🧮 Parâmetros de Valuation")
-            val_params = getattr(analysis, 'valuation_params', "Parâmetros misturados no resumo (atualize o domain).")
+            val_params = getattr(analysis, 'valuation_params', "Parâmetros não estruturados.")
             st.warning(val_params)
 
         st.divider()
@@ -250,18 +244,18 @@ class IFRS2App:
             res = []
             for idx, inp in enumerate(inputs):
                 fv = FinancialMath.binomial_custom_optimized(
-                    S, K, r, vol, q, 
+                    S=S, K=K, r=r, vol=vol, q=q, 
                     vesting_years=inp["vesting"],
                     turnover_w=analysis.turnover_rate,
                     multiple_M=inp["m"],
                     hurdle_H=0.0,
                     T_years=inp["T_life"],
-                    inflacao_anual=0.0, # Simplificação para UI
+                    inflacao_anual=0.0, 
                     lockup_years=inp["lockup"]
                 )
                 w_fv = fv * inp["prop"]
                 total_fv += w_fv
-                res.append({"Vesting": inp["vesting"], "FV Unit": fv})
+                res.append({"Vesting": inp["vesting"], "FV Unit": fv, "FV Ponderado": w_fv})
                 bar.progress((idx+1)/len(inputs))
             
             st.metric("Resultado Binomial", f"R$ {total_fv:.4f}")
@@ -269,21 +263,21 @@ class IFRS2App:
 
     def _render_rsu(self, S, r, q, analysis):
         st.info("ℹ️ Valuation de RSU / Matching Shares (Por Tranche)")
-        st.caption("Cálculo: Preço da Ação descontado de Dividendos e Lock-up para cada período de vesting.")
+        st.caption("Cálculo: Preço da Ação descontado de Dividendos e Lock-up.")
         
         self._manage_tranches()
         tranches = st.session_state['tranches']
         tranche_inputs = []
 
         if not tranches:
-            st.warning("Nenhuma tranche definida. Adicione tranches acima.")
+            st.warning("Nenhuma tranche definida.")
             return
 
         for i, t in enumerate(tranches):
             with st.expander(f"Tranche {i+1}", expanded=True):
                 c1, c2, c3, c4 = st.columns(4)
-                t_vest = c1.number_input(f"Vesting (Anos) {i}", value=float(t.vesting_date), key=f"rsu_v_{i}")
-                t_lock = c2.number_input(f"Lock-up (Anos) {i}", value=float(analysis.lockup_years), key=f"rsu_l_{i}")
+                t_vest = c1.number_input(f"Vesting {i}", value=float(t.vesting_date), key=f"rsu_v_{i}")
+                t_lock = c2.number_input(f"Lock-up {i}", value=float(analysis.lockup_years), key=f"rsu_l_{i}")
                 t_vol = c3.number_input(f"Volatilidade % (Lockup) {i}", value=30.0, key=f"rsu_vol_{i}") / 100
                 t_prop = c4.number_input(f"Proporção % {i}", value=float(t.proportion * 100), key=f"rsu_prop_{i}") / 100
                 
@@ -312,15 +306,12 @@ class IFRS2App:
                 res_data.append({
                     "Tranche": i+1, 
                     "Vesting": inp["T"], 
-                    "Valor Base": base_fv, 
-                    "Desconto": discount, 
                     "FV Unitário": unit_fv,
                     "FV Ponderado": weighted_fv
                 })
             
-            c_res1, c_res2 = st.columns([1, 2])
-            c_res1.metric("Fair Value Total (Ponderado)", f"R$ {total_fv:.4f}")
-            c_res2.dataframe(pd.DataFrame(res_data))
+            st.metric("Fair Value Total (Ponderado)", f"R$ {total_fv:.4f}")
+            st.dataframe(pd.DataFrame(res_data))
 
     def _render_monte_carlo_ai(self, S, K, r, vol, q, analysis, text, api_key):
         st.warning("⚠️ Monte Carlo via Geração de Código IA")
@@ -338,14 +329,13 @@ class IFRS2App:
             st.session_state['mc_code'] = code # Save edits
             
             if c2.button("2. Executar", type="primary"):
-                # Execução Segura (Sandbox Local)
                 old_stdout = io.StringIO()
                 sys.stdout = old_stdout
                 local_scope = {}
                 try:
                     exec(code, local_scope)
                     output = old_stdout.getvalue()
-                    sys.stdout = sys.__stdout__ # Reset
+                    sys.stdout = sys.__stdout__ 
                     
                     st.text(output)
                     if 'fv' in local_scope:
