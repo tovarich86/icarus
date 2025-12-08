@@ -317,7 +317,7 @@ class IFRS2App:
 
     def _render_rate_widget_table(self, i, prefix, t_years):
         """
-        WIDGET DE DI OTIMIZADO: Tabela com Formatação de Referência e Callbacks Seguros.
+        WIDGET DE DI OTIMIZADO: Tabela Limpa (01/2026) e Correção de Erros UI.
         """
         st.markdown("Taxa DI (%)")
         c_in, c_pop = st.columns([0.85, 0.15])
@@ -325,12 +325,10 @@ class IFRS2App:
         key_val = f"rate_val_{prefix}_{i}"
         key_w = f"rate_w_{prefix}_{i}"
         
-        # Inicialização
         if key_val not in st.session_state: 
             st.session_state[key_val] = 10.75
         
-        # Sincronização Input <-> Session State
-        # Se o usuário digitar no input, atualizamos o session_state
+        # Sincroniza Input
         current_pct = st.session_state[key_val] * 100
         val = c_in.number_input(
             "Rate", 
@@ -341,7 +339,7 @@ class IFRS2App:
             format="%.2f"
         )
         
-        # Atualização manual do input (evita loop se não mudou)
+        # Atualiza state
         new_decimal = val / 100.0
         if abs(new_decimal - st.session_state[key_val]) > 1e-6:
              st.session_state[key_val] = new_decimal
@@ -366,24 +364,25 @@ class IFRS2App:
             if k_df in st.session_state and not st.session_state[k_df].empty:
                 df = st.session_state[k_df]
                 
-                # --- VISUALIZAÇÃO FORMATADA (01/2026) ---
+                # --- VISUALIZAÇÃO LIMPA ---
                 df_show = df.copy()
                 df_show['Taxa (%)'] = (df_show['Taxa'] * 100).map('{:.2f}'.format)
                 
-                # Usa a coluna formatada que vem do serviço ou cria fallback
-                col_venc_show = 'Vencimento_Fmt' if 'Vencimento_Fmt' in df.columns else 'Vencimento_Str'
+                # Usa Vencimento_Fmt (01/2026) se disponível
+                col_venc = 'Vencimento_Fmt' if 'Vencimento_Fmt' in df.columns else 'Vencimento_Str'
                 
                 st.caption("Taxas Disponíveis:")
+                # Exibe APENAS Vencimento e Taxa
                 st.dataframe(
-                    df_show[[col_venc_show, 'Taxa (%)']].rename(columns={col_venc_show: 'Vencimento'}), 
+                    df_show[[col_venc, 'Taxa (%)']].rename(columns={col_venc: 'Vencimento'}), 
                     use_container_width=True, 
                     height=200,
                     hide_index=True
                 )
                 
-                # --- SELETOR ---
+                # SELETOR
                 df['Label'] = df.apply(
-                    lambda x: f"{x[col_venc_show]} - {x['Taxa']*100:.2f}%", 
+                    lambda x: f"{x[col_venc]} - {x['Taxa']*100:.2f}%", 
                     axis=1
                 )
                 
@@ -399,20 +398,19 @@ class IFRS2App:
                     label_visibility="collapsed"
                 )
                 
-                # --- CALLBACK (CORREÇÃO DO ERRO API) ---
-                # Função chamada ANTES de renderizar, segura para alterar Session State
-                def apply_rate_callback(k_decimal, taxa_decimal):
-                    st.session_state[k_decimal] = taxa_decimal
+                # CALLBACK SEGURO
+                def apply_callback(k_target, val_decimal):
+                    st.session_state[k_target] = val_decimal
                 
                 if selected_label:
                     row = df[df['Label'] == selected_label].iloc[0]
-                    sel_taxa_decimal = row['Taxa']
+                    sel_taxa = row['Taxa']
                     
                     st.button(
                         f"Usar {selected_label}", 
                         key=f"b_apply_di_{prefix}_{i}",
-                        on_click=apply_rate_callback,
-                        args=(key_val, sel_taxa_decimal)
+                        on_click=apply_callback,
+                        args=(key_val, sel_taxa)
                     )
             
             elif k_df in st.session_state:
