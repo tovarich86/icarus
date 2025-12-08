@@ -73,39 +73,53 @@ class DocumentService:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash')
         
+        # Prompt Otimizado para IFRS 2 / CPC 10
         prompt = f"""
         Você é um Consultor Sênior em Remuneração Executiva e Especialista em IFRS 2 (CPC 10).
-        Sua tarefa é analisar o contrato fornecido e gerar um JSON estruturado.
-        
+        Sua tarefa é analisar o contrato fornecido e gerar um JSON estruturado para precificação.
+
         DIRETRIZES DE FORMATAÇÃO (UX):
         - O texto de saída dentro dos campos JSON deve ser "Human Readable" e pronto para renderização em Markdown.
         - Use SEMPRE o padrão: **Nome do Tópico:** Explicação do tópico.
         - Pule uma linha vazia entre cada tópico para facilitar a leitura.
         - Use listas com bullet points (-) para subitens (ex: regras de Forfeiture).
 
-        CONTEXTO DE ANÁLISE:
-        1. **Resumo do Programa**: Detalhe Instrumento, Vesting, Liquidação, Forfeiture, Aceleração e Lock-up.
-        2. **Parâmetros de Valuation (CRÍTICO)**: Explicite o impacto no Fair Value (FV):
-           - Instrumento (Equity vs Cash).
-           - Vesting (Tempo vs Performance).
-           - Graded Vesting (Cálculo por Tranche).
-           - Forfeiture (Ajuste de quantidade, não preço).
+        CONTEXTO DE ANÁLISE (DIRETRIZES IFRS 2):
+        1. **Resumo do Programa**: 
+           - Detalhe Instrumento (Opção vs RSU/Ação Restrita).
+           - Cronograma de Vesting (Datas e % por tranche).
+           - Liquidação (Física/Ações ou Financeira/Caixa - observar se há opção da cia).
+           - Regras de Forfeiture (Good Leaver vs Bad Leaver e impacto no vesting).
+           - Aceleração (Change of Control, Morte/Invalidez).
+           - **Dividendos na Carência**: O participante recebe dividendos/JCP sobre as ações não vestidas? (Sim/Não).
+           - Lock-up (Restrição de venda pós-vesting).
+
+        2. **Parâmetros de Valuation (CRÍTICO - IMPACTO NO FAIR VALUE)**:
+           - **Instrumento**: Classificar como *Equity-settled* (FV na outorga) ou *Cash-settled* (FV remensurado).
+           - **Vesting**: Diferenciar Tempo (Service Condition) de Performance. Se Performance, diferenciar Mercado (TSR - afeta preço) de Não-Mercado (EBITDA - afeta quantidade).
+           - **Graded Vesting**: Se houver tranches, explicitar que "Cada tranche deve ser precificada individualmente com seu próprio prazo".
+           - **Dividend Yield**: 
+             - Se o participante RECEBE dividendos na carência: "Não descontar dividendos do preço da ação (Dividend Yield = 0% no modelo)".
+             - Se o participante NÃO RECEBE: "O modelo deve descontar o Dividend Yield esperado durante a carência".
+           - **Lock-up**: Se houver, citar necessidade de desconto de iliquidez (Chaffe).
+           - **Forfeiture**: "Ajusta a quantidade de instrumentos no final, não o preço unitário".
 
         TEXTO DO CONTRATO:
         {text[:90000]}
 
         SAÍDA JSON (ESTRITA):
         {{
-            "program_summary": "String formatada em Markdown. Ex: '**Instrumento:** Ações Restritas (RSU)\\n\\n**Vesting:** 3 anos...'",
+            "program_summary": "String Markdown. Ex: '**Instrumento:** Ações Restritas (RSU)\\n\\n**Vesting:** 3 anos...'",
             
-            "valuation_params": "String formatada em Markdown focada no IFRS 2. Ex: '**1. Instrumento:** Opções (Equity-settled), FV fixado na outorga.\\n\\n**2. Vesting:** Graded, exige cálculo segregado...'",
+            "valuation_params": "String Markdown focada no IFRS 2. Ex: '**1. Instrumento:** Opções (Equity-settled)...'",
             
             "summary": "Um parágrafo curto resumindo o plano.",
+            
             "contract_features": "Lista curta das principais cláusulas.",
             
             "model_data": {{
                 "recommended_model": "RSU" | "Binomial" | "Black-Scholes" | "Monte Carlo",
-                "deep_rationale": "Justificativa técnica da escolha do modelo baseada na PARCIMÔNIA. Se Strike for Zero (Matching/RSU), USE 'RSU'. Se houver TSR, USE 'Monte Carlo'. Se houver Lock-up/Americanas, USE 'Binomial'.",
+                "deep_rationale": "Justificativa técnica baseada na PARCIMÔNIA. Strike Zero -> RSU. TSR -> Monte Carlo. Lock-up/Americanas -> Binomial. Caso padrão -> Black-Scholes.",
                 "justification": "Frase curta para UI.",
                 "comparison": "Comparação breve.",
                 "pros": ["Pró 1"], 
@@ -203,7 +217,6 @@ class DocumentService:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash')
         
-        # Serialização segura de parâmetros
         safe_params = {k: (float(v) if isinstance(v, (int, float)) else v) for k, v in params.items()}
         
         prompt = f"""
@@ -235,11 +248,10 @@ class DocumentService:
         """Gera dados fictícios para demonstração (sem API Key)."""
         tranches = [Tranche(1.0, 0.25), Tranche(2.0, 0.25), Tranche(3.0, 0.25), Tranche(4.0, 0.25)]
         
-        # CORREÇÃO APLICADA: Adicionados program_summary e valuation_params
         return PlanAnalysisResult(
             summary="[MOCK] Plano simulado: 4 tranches, correção de strike (IGPM).",
-            program_summary="[MOCK] Resumo: Plano de Opções sobre Ações (Stock Options). Vesting em 4 tranches anuais de 25%. Liquidação física.",
-            valuation_params="[MOCK] Parâmetros: Modelo Binomial recomendado. Considerar Lock-up de 2 anos (Desconto de Iliquidez) e Correção de Strike pelo IGPM.",
+            program_summary="**Instrumento:** Plano de Opções sobre Ações (Stock Options).\n\n**Vesting:** Graded Vesting em 4 tranches anuais de 25%.\n\n**Liquidação:** Física (Equity-settled).",
+            valuation_params="**1. Instrumento:** Opções (Equity-settled), FV fixado na data de outorga.\n\n**2. Dividendos:** Não há direito a dividendos na carência (Descontar Yield).\n\n**3. Modelo:** Binomial (devido ao Lock-up).",
             contract_features="[MOCK] Vesting 4 anos (25% a.a), Correção Monetária Strike.",
             methodology_rationale="[MOCK] Binomial recomendado devido a barreiras complexas.",
             model_recommended=PricingModelType.BINOMIAL, 
