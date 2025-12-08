@@ -116,7 +116,7 @@ class IFRS2App:
         c1, c2, c3, c4 = st.columns(4)
         S = c1.number_input("Spot (R$)", 0.0, 10000.0, 50.0)
         K = c2.number_input("Strike (R$)", 0.0, 10000.0, analysis.strike_price)
-        q = c3.number_input("Div Yield (%)", 0.0, 100.0, 4.0) / 100
+        q = c3.number_input("Div Yield (%)", 0.0, 100.0, 0) / 100
         
         opts = [m for m in PricingModelType if m != PricingModelType.UNDEFINED]
         idx = opts.index(analysis.model_recommended) if analysis.model_recommended in opts else 0
