@@ -199,7 +199,7 @@ class DocumentService:
             contract_features=data.get('contract_features', ''),
             methodology_rationale=model_data.get('deep_rationale', ''),
             model_recommended=model_enum,
-            settlement_type=settlement_enum, # Novo campo
+            settlement_type=settlement_enum, # Novo campo obrigatório
             model_reason=model_data.get('justification', ''),
             model_comparison=model_data.get('comparison', ''),
             pros=model_data.get('pros', []),
