@@ -160,7 +160,7 @@ class DocumentService:
             except: return default
 
         return PlanAnalysisResult(
-            return PlanAnalysisResult(
+            
             summary=data.get('summary', ''),
             program_summary=data.get('program_summary', 'Resumo do programa não identificado.'), # <--- NOVO
             valuation_params=data.get('valuation_params', 'Parâmetros não identificados.'),      # <--- NOVO
