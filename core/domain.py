@@ -73,6 +73,8 @@ class PlanAnalysisResult:
     """
     # Metadados Qualitativos
     summary: str
+    program_summary: str       
+    valuation_params: str
     contract_features: str 
     methodology_rationale: str 
     model_recommended: PricingModelType
