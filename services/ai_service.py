@@ -90,7 +90,7 @@ class DocumentService:
            - **Forfeiture/Turnover**: "Ajusta a quantidade de instrumentos, aplicado fora do modelo de precificação unitária".
 
         TEXTO DO CONTRATO:
-        {text[:45000]}
+        {text[:90000]}
 
         SAÍDA JSON (ESTRITA):
         {{
