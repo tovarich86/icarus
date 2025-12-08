@@ -101,9 +101,9 @@ class DocumentService:
 
         SAÍDA JSON (ESTRITA):
         {{
-            "program_summary": "Resumo Markdown focado em RH/Jurídico. Ex: '**Instrumento:** Phantom Shares (Caixa)...'",
+            "program_summary": "Resumo Markdown focado em RH (remuneração) /Jurídico (societário) e no entedimento das principais clásula pelo beneficiário, resposta separada em tópicos pulando linhas entre tópicos. Ex: '**Instrumento:** Phantom Shares (Caixa)...'",
             
-            "valuation_params": "Resumo Markdown focado em Quant. Ex: '**1. Liquidação:** Caixa (Passivo)... **2. Life:** 10 anos...'",
+            "valuation_params": "Resumo Markdown focado em parametros de de cãulo de fair vaue para modelagem financeira resposta em tópicos pulando linhas entre tópicos. Ex: '**1. Liquidação:** Caixa (Passivo)... **2. Life:** 10 anos...'",
             
             "summary": "Parágrafo curto geral.",
             
