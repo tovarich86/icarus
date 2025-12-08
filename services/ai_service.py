@@ -73,33 +73,34 @@ class DocumentService:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash')
         
-        # Prompt Atualizado com Lógica de IFRS 2 e Valuation Explícito
         prompt = f"""
         Você é um Consultor Sênior em Remuneração Executiva e Especialista em IFRS 2 (CPC 10).
         Sua tarefa é analisar o contrato fornecido e gerar um JSON estruturado.
         
-        CONTEXTO DE ANÁLISE (DIRETRIZES RÍGIDAS):
-        1. **Resumo do Programa**: Deve ser detalhado e categorizado (Instrumento, Vesting, Liquidação, Forfeiture, Aceleração, Lock-up).
-        2. **Parâmetros de Valuation (CRÍTICO)**: Não apenas liste os números. Você DEVE EXPLICITAR O IMPACTO NO FAIR VALUE (FV) para o usuário final da ferramenta:
-           - **Instrumento**: Se Ações/Opções (Equity-settled) -> FV fixado na Outorga (não remensura). Se Dinheiro (Cash-settled) -> Remensurado.
-           - **Vesting de Tempo**: Citar que não ajusta o FV unitário, mas impacta a quantidade (Turnover).
-           - **Graded Vesting (Tranches)**: Explicitar que "O cálculo do FV deve ser segregado por Tranche individual".
-           - **Performance de Mercado (TSR)**: "Deve ser incorporada NO cálculo do FV (Monte Carlo)".
-           - **Performance Não-Mercado (EBITDA)**: "Não impacta o FV unitário, ajusta-se a quantidade esperada (Vesting Condition)".
-           - **Lock-up**: "Deve ser aplicado desconto de iliquidez (Chaffe) sobre o FV".
-           - **Forfeiture/Turnover**: "Ajusta a quantidade de instrumentos, aplicado fora do modelo de precificação unitária".
+        DIRETRIZES DE FORMATAÇÃO (UX):
+        - O texto de saída dentro dos campos JSON deve ser "Human Readable" e pronto para renderização em Markdown.
+        - Use SEMPRE o padrão: **Nome do Tópico:** Explicação do tópico.
+        - Pule uma linha vazia entre cada tópico para facilitar a leitura.
+        - Use listas com bullet points (-) para subitens (ex: regras de Forfeiture).
+
+        CONTEXTO DE ANÁLISE:
+        1. **Resumo do Programa**: Detalhe Instrumento, Vesting, Liquidação, Forfeiture, Aceleração e Lock-up.
+        2. **Parâmetros de Valuation (CRÍTICO)**: Explicite o impacto no Fair Value (FV):
+           - Instrumento (Equity vs Cash).
+           - Vesting (Tempo vs Performance).
+           - Graded Vesting (Cálculo por Tranche).
+           - Forfeiture (Ajuste de quantidade, não preço).
 
         TEXTO DO CONTRATO:
         {text[:90000]}
 
         SAÍDA JSON (ESTRITA):
         {{
-            "program_summary": "Resumo estruturado em tópicos: Instrumento, Condições de Vesting, Cronograma, Liquidação (Ações/Caixa), Regras de Forfeiture (Good/Bad Leaver), Aceleração (Change of Control) e Lock-up.",
+            "program_summary": "String formatada em Markdown. Ex: '**Instrumento:** Ações Restritas (RSU)\\n\\n**Vesting:** 3 anos...'",
             
-            "valuation_params": "Texto explicativo focado no IFRS 2. Exemplo: '1. Instrumento: Opções (Equity-settled), FV fixado na data de outorga. 2. Vesting: Graded (3 tranches), exige cálculo de FV individual para cada tranche. 3. Lock-up: Identificado (2 anos), aplicar desconto de iliquidez (Chaffe). 4. Performance: Não há gatilhos de mercado, utilizar Black-Scholes ou Binomial padrão.'",
+            "valuation_params": "String formatada em Markdown focada no IFRS 2. Ex: '**1. Instrumento:** Opções (Equity-settled), FV fixado na outorga.\\n\\n**2. Vesting:** Graded, exige cálculo segregado...'",
             
             "summary": "Um parágrafo curto resumindo o plano.",
-            
             "contract_features": "Lista curta das principais cláusulas.",
             
             "model_data": {{
