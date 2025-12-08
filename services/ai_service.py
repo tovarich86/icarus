@@ -77,7 +77,11 @@ class DocumentService:
         prompt = f"""
         Você é um Consultor Sênior em Remuneração Executiva e Especialista em IFRS 2 (CPC 10).
         Sua tarefa é analisar o contrato fornecido e gerar um JSON estruturado para precificação e contabilização.
-        A resposta deve ser dada por tópicos, pulando linhas entre tópicos para facilitar a leitura.
+
+        DIRETRIZES DE FORMATAÇÃO (MUITO IMPORTANTE):
+        - Nos campos de texto ('program_summary', 'valuation_params'), use QUEBRAS DE LINHA DUPLAS (\\n\\n) entre cada tópico.
+        - Isso é essencial para que o texto seja renderizado corretamente em parágrafos separados.
+        - Use negrito (**Tópico:**) para os títulos de cada item.
 
         DIRETRIZES DE ANÁLISE CRÍTICA (IFRS 2):
         
@@ -106,9 +110,9 @@ class DocumentService:
 
         SAÍDA JSON (ESTRITA):
         {{
-            "program_summary": "Resumo Markdown focado em RH/Jurídico. Ex: '**Instrumento:** Phantom Shares...'",
+            "program_summary": "Resumo Markdown com quebras de linha duplas (\\n\\n). Ex: '**Instrumento:** RSU...\\n\\n**Vesting:** 3 anos...'",
             
-            "valuation_params": "Resumo Markdown focado em parâmetros Quantitativos. OBRIGATÓRIO incluir análise de Dividendos. Ex: '**1. Liquidação:** Caixa... **2. Dividendos:** Não recebe na carência (Descontar Yield)... **3. Life:** 10 anos...'",
+            "valuation_params": "Resumo Markdown com quebras de linha duplas (\\n\\n). OBRIGATÓRIO incluir análise de Dividendos. Ex: '**1. Liquidação:** Caixa...\\n\\n**2. Dividendos:** Não recebe na carência (Descontar Yield)...\\n\\n**3. Life:** 10 anos...'",
             
             "summary": "Parágrafo curto geral.",
             
@@ -152,7 +156,7 @@ class DocumentService:
             return DocumentService._map_json_to_domain(data)
             
         except Exception as e:
-            # DEBUG: Mostra o erro real na interface para sabermos por que caiu no Mock
+            # DEBUG: Mostra o erro real na interface
             st.error(f"⚠️ Erro na Análise IA: {str(e)}")
             st.caption("O sistema está usando dados Mock (fictícios) devido ao erro acima.")
             return DocumentService.mock_analysis(text)
