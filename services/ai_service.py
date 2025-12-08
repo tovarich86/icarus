@@ -77,23 +77,28 @@ class DocumentService:
         prompt = f"""
         Você é um Consultor Sênior em Remuneração Executiva e Especialista em IFRS 2 (CPC 10).
         Sua tarefa é analisar o contrato fornecido e gerar um JSON estruturado para precificação e contabilização.
-        A resposta devera ser dada por tópicoms pulando linhas entre tópicos para facilitar leitura identficaçõ de tópicos
+        A resposta deve ser dada por tópicos, pulando linhas entre tópicos para facilitar a leitura.
 
         DIRETRIZES DE ANÁLISE CRÍTICA (IFRS 2):
         
         1. **Classificação (Settlement Type):**
            - **EQUITY_SETTLED:** Se o plano entrega AÇÕES reais da empresa.
-           - **CASH_SETTLED:** Se o plano paga em DINHEIRO baseado no valor da ação (Phantom Shares, SARs, Múltiplos). Procure termos como "Liquidação Financeira", "Pagamento em Caixa", "Direito de Valorização".
+           - **CASH_SETTLED:** Se o plano paga em DINHEIRO baseado no valor da ação (Phantom Shares, SARs). Termos chave: "Liquidação Financeira", "Pagamento em Caixa".
            - **HYBRID:** Se a empresa tem a opção de escolher como pagar.
 
-        2. **Prazos (Vesting vs Expiration):**
-           - **Vesting (Carência):** Período para ganhar o direito (ex: 3 anos, 25% ao ano).
-           - **Expiration (Vencimento/Life):** Prazo máximo contratual para exercer a opção (ex: 10 anos). 
+        2. **Dividendos na Carência (CRÍTICO):**
+           - Verifique se o participante recebe dividendos (ou equivalentes) sobre as opções/ações AINDA NÃO VESTIDAS.
+           - **Impacto:** Se NÃO receber (o mais comum), o modelo deve descontar o Dividend Yield esperado (input q > 0). Se RECEBER, não se desconta (q = 0).
+           - Explicite isso no campo 'valuation_params'.
+
+        3. **Prazos (Vesting vs Expiration):**
+           - **Vesting (Carência):** Período para ganhar o direito.
+           - **Expiration (Life):** Prazo máximo contratual para exercer.
            - *Nota:* Frequentemente o vesting é curto (3-4 anos) mas o vencimento é longo (10 anos). Diferencie-os.
 
-        3. **Instrumento e Modelo:**
-           - Strike Zero/Simbólico -> RSU (Modelo RSU).
-           - Strike de Mercado -> Opção (Black-Scholes ou Binomial).
+        4. **Instrumento e Modelo:**
+           - Strike Zero -> RSU.
+           - Strike de Mercado -> Opção (Black-Scholes/Binomial).
            - Gatilho de Performance (TSR) -> Monte Carlo.
 
         TEXTO DO CONTRATO:
@@ -101,9 +106,9 @@ class DocumentService:
 
         SAÍDA JSON (ESTRITA):
         {{
-            "program_summary": "Resumo Markdown focado em RH (remuneração) /Jurídico (societário) e no entedimento das principais clásula pelo beneficiário, resposta separada em tópicos pulando linhas entre tópicos. Ex: '**Instrumento:** Phantom Shares (Caixa)...'",
+            "program_summary": "Resumo Markdown focado em RH/Jurídico. Ex: '**Instrumento:** Phantom Shares...'",
             
-            "valuation_params": "Resumo Markdown focado em parametros de de cãulo de fair vaue para modelagem financeira resposta em tópicos pulando linhas entre tópicos. Ex: '**1. Liquidação:** Caixa (Passivo)... **2. Life:** 10 anos...'",
+            "valuation_params": "Resumo Markdown focado em parâmetros Quantitativos. OBRIGATÓRIO incluir análise de Dividendos. Ex: '**1. Liquidação:** Caixa... **2. Dividendos:** Não recebe na carência (Descontar Yield)... **3. Life:** 10 anos...'",
             
             "summary": "Parágrafo curto geral.",
             
@@ -112,7 +117,7 @@ class DocumentService:
             "model_data": {{
                 "recommended_model": "RSU" | "Binomial" | "Black-Scholes" | "Monte Carlo",
                 "settlement_type": "EQUITY_SETTLED" | "CASH_SETTLED" | "HYBRID",
-                "deep_rationale": "Justificativa técnica. Se for Cash-Settled, mencione a necessidade de remensuração a cada balanço.",
+                "deep_rationale": "Justificativa técnica. Mencione Passivo se for Cash-Settled.",
                 "justification": "Frase curta para UI.",
                 "comparison": "Comparação breve.",
                 "pros": ["Pró 1"], 
@@ -120,17 +125,18 @@ class DocumentService:
                 "params": {{
                     "option_life": <float, Prazo TOTAL de vencimento do contrato em anos (ex: 10.0)>,
                     "strike_price": <float>,
-                    "strike_is_zero": <bool, true se for RSU/Matching/Phantom com custo zero>,
-                    "turnover_rate": <float, ex: 0.05 para 5%>,
-                    "early_exercise_factor": <float, geralmente 2.0>,
-                    "lockup_years": <float, anos de restrição pós-vesting>,
+                    "strike_is_zero": <bool>,
+                    "dividends_during_vesting": <bool, true se recebe dividendos na carência>,
+                    "turnover_rate": <float>,
+                    "early_exercise_factor": <float>,
+                    "lockup_years": <float>,
                     "has_strike_correction": <bool>,
                     "has_market_condition": <bool>,
                     "vesting_schedule": [
                         {{
-                            "period_years": <float, Data do Vesting>, 
-                            "percentage": <float, ex: 0.25>,
-                            "expiration_years": <float, Data de Vencimento desta tranche (opcional, se diferente do geral)>
+                            "period_years": <float>, 
+                            "percentage": <float>,
+                            "expiration_years": <float>
                         }}
                     ]
                 }}
@@ -146,7 +152,9 @@ class DocumentService:
             return DocumentService._map_json_to_domain(data)
             
         except Exception as e:
-            print(f"Erro na API Gemini: {e}")
+            # DEBUG: Mostra o erro real na interface para sabermos por que caiu no Mock
+            st.error(f"⚠️ Erro na Análise IA: {str(e)}")
+            st.caption("O sistema está usando dados Mock (fictícios) devido ao erro acima.")
             return DocumentService.mock_analysis(text)
 
     @staticmethod
@@ -200,7 +208,7 @@ class DocumentService:
             contract_features=data.get('contract_features', ''),
             methodology_rationale=model_data.get('deep_rationale', ''),
             model_recommended=model_enum,
-            settlement_type=settlement_enum, # Novo campo obrigatório
+            settlement_type=settlement_enum,
             model_reason=model_data.get('justification', ''),
             model_comparison=model_data.get('comparison', ''),
             pros=model_data.get('pros', []),
@@ -264,7 +272,7 @@ class DocumentService:
         return PlanAnalysisResult(
             summary="[MOCK] Plano Phantom Shares: Liquidação em Caixa.",
             program_summary="**Instrumento:** Phantom Shares (Direito de Valorização).\n\n**Liquidação:** Financeira (Cash-Settled) - Passivo Contábil.",
-            valuation_params="**1. Classificação:** Passivo (Remensurar a cada balanço).\n\n**2. Vencimento:** 10 anos (Life) vs Vesting 3 anos.",
+            valuation_params="**1. Classificação:** Passivo (Remensurar a cada balanço).\n\n**2. Dividendos:** Não recebe na carência (Descontar Yield).\n\n**3. Life:** 10 anos.",
             contract_features="[MOCK] Vesting 3 anos, Life 10 anos, Pagamento em Dinheiro.",
             methodology_rationale="[MOCK] Por ser liquidado em caixa (Phantom), deve ser tratado como passivo e remensurado a valor justo. Modelo Binomial recomendado se houver barreiras, ou BS Graded para casos simples.",
             model_recommended=PricingModelType.BLACK_SCHOLES_GRADED,
