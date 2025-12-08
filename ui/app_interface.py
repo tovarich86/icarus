@@ -419,53 +419,59 @@ class IFRS2App:
         
         for idx, item in enumerate(inputs):
             try:
-                # --- CASTING EXPLÍCITO DE SEGURANÇA ---
-                # Isso garante que nenhum "None", String ou NumPy float32 quebre o Numba
+                # --- CORREÇÃO DE ESCALA E TIPAGEM ---
+                # A UI entrega a volatilidade em formato percentual (ex: 30.0 para 30%)
+                # Dividimos por 100 aqui para o motor receber decimal (0.30)
+                vol_decimal = float(item['Vol']) / 100.0
+                
+                # Garantimos que todos os outros inputs sejam floats seguros
                 S = float(item['S'])
                 K = float(item['K'])
-                r = float(item['r'])
-                vol = float(item['Vol'])
+                r = float(item['r'])     # Taxa já vem em decimal do widget
                 q = float(item['q'])
                 T = float(item['T'])
                 
-                # Binomial Específico
+                # Inputs específicos (com defaults seguros)
                 vesting = float(item.get('Vesting', 0.0))
-                turnover = float(item.get('Turnover', 0.0))
+                turnover = float(item.get('Turnover', 0.0)) # Já vem decimal
                 mul_m = float(item.get('M', 2.0))
-                strike_corr = float(item.get('StrikeCorr', 0.0))
+                # Correção no StrikeCorr e Lockup se necessário
+                strike_corr = float(item.get('StrikeCorr', 0.0)) 
                 lockup = float(item.get('Lockup', 0.0))
-                
-                # --- CHAMADA AOS MOTORES ---
+
+                # --- CHAMADA AOS MOTORES (Com Volatilidade Corrigida) ---
                 if model_type == PricingModelType.BINOMIAL:
                     fv = FinancialMath.binomial_custom_optimized(
-                        S, K, r, vol, q,
+                        S, K, r, vol_decimal, q,
                         vesting, turnover, mul_m, 0.0,
                         T, strike_corr, lockup
                     )
                 elif model_type == PricingModelType.BLACK_SCHOLES_GRADED:
-                    fv = FinancialMath.bs_call(S, K, T, r, vol, q)
+                    fv = FinancialMath.bs_call(S, K, T, r, vol_decimal, q)
                 elif model_type == PricingModelType.RSU:
-                    base = item['S'] * np.exp(-item['q']*item['T'])
-                    disc = FinancialMath.calculate_lockup_discount(item['Vol'], item['Lockup'], base, item['q']) if item['Lockup'] > 0 else 0
+                    base = S * np.exp(-q*T)
+                    disc = 0.0
+                    if lockup > 0:
+                        disc = FinancialMath.calculate_lockup_discount(vol_decimal, lockup, base, q)
                     fv = base - disc
                 
-                w_fv = fv * item['Prop']
+                w_fv = fv * float(item['Prop'])
                 total_fv += w_fv
                 
                 res_data.append({
                     "Tranche": item['TrancheID'],
                     "FV Unit": fv,
                     "FV Ponderado": w_fv,
-                    "Detalhes": str({k:v for k,v in item.items() if k not in ['S','K','r','Vol','q']})
+                    "Input Vol": f"{vol_decimal*100:.2f}%" # Log para conferência
                 })
             except Exception as e:
-                st.error(f"Erro Tranche {idx}: {e}")
+                st.error(f"Erro Tranche {idx+1}: {e}")
+                
             prog.progress((idx+1)/len(inputs))
             
         c1, c2 = st.columns([1,3])
         c1.metric("Fair Value Total", f"R$ {total_fv:,.2f}")
         c2.dataframe(pd.DataFrame(res_data))
-
     def _manage_tranches_buttons(self):
         c1, c2 = st.columns(2)
         if c1.button("➕ Adicionar Tranche"):
