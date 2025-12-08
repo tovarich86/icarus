@@ -64,7 +64,7 @@ class IFRS2App:
                 self._handle_analysis(uploaded_files, manual_text, gemini_key)
             
             st.divider()
-            st.caption("v.Beta 2.0 - Foco Contábil")
+            st.caption("v.Beta 2.1 - UX & Strike Correction")
 
         # --- ÁREA PRINCIPAL ---
         if st.session_state['analysis_result']:
@@ -175,11 +175,11 @@ class IFRS2App:
             st.warning("⚠️ Atenção: Instrumentos Equity-Settled geralmente não são remensurados, exceto em modificações contratuais.")
 
         col1, col2, col3, col4 = st.columns(4)
-        S = col1.number_input("Preço da Ação (Spot) R$", 0.0, 10000.0, 50.0, help="Preço na data base (fechamento).")
-        K = col2.number_input("Preço de Exercício (Strike) R$", 0.0, 10000.0, analysis.strike_price, help="Strike atualizado.")
-        vol = col3.number_input("Volatilidade Anual (%)", 0.0, 500.0, 30.0, help="Volatilidade implícita ou histórica para o prazo remanescente.") / 100
-        r = col4.number_input("Taxa Livre de Risco (%)", 0.0, 100.0, 10.75, help="Taxa spot (ex: DI Futuro / NTN-B) para o prazo remanescente.") / 100
-        q = st.number_input("Dividend Yield Esperado (% a.a.)", 0.0, 100.0, 4.0) / 100
+        S = col1.number_input("Preço da Ação (Spot) R$", 0.0, 10000.0, 50.0, help="Preço de fechamento da ação na data base da avaliação.")
+        K = col2.number_input("Preço de Exercício (Strike) R$", 0.0, 10000.0, analysis.strike_price, help="Preço de exercício atualizado (se aplicável).")
+        vol = col3.number_input("Volatilidade Anual (%)", 0.0, 500.0, 30.0, help="Volatilidade implícita ou histórica esperada para o prazo remanescente.") / 100
+        r = col4.number_input("Taxa Livre de Risco (%)", 0.0, 100.0, 10.75, help="Taxa spot (Vertices da curva DI/Pré) equivalente ao prazo da opção.") / 100
+        q = st.number_input("Dividend Yield Esperado (% a.a.)", 0.0, 100.0, 4.0, help="Taxa anual de dividendos esperada. Se o participante recebe dividendos na carência, use 0%.") / 100
 
         st.subheader("4. Cálculo do Fair Value")
 
@@ -229,7 +229,7 @@ class IFRS2App:
                     value=float(t.vesting_date), 
                     min_value=0.0, step=0.1,
                     key=f"bs_v_{i}",
-                    help="Tempo restante até a aquisição do direito."
+                    help="Período de carência até a aquisição do direito (Cliff). Influencia o reconhecimento da despesa."
                 )
                 
                 # Expiration Date (Maturity / Expected Life)
@@ -239,7 +239,7 @@ class IFRS2App:
                     value=float(def_exp), 
                     min_value=0.01, step=0.1,
                     key=f"bs_t_{i}",
-                    help="Tempo restante até o vencimento contratual ou vida esperada (Input do Modelo)."
+                    help="Prazo contratual remanescente ou Vida Esperada da opção. Input 'T' do modelo."
                 )
                 
                 t_prop = c3.number_input(f"Peso %", value=float(t.proportion*100), key=f"bs_p_{i}")/100
@@ -275,21 +275,55 @@ class IFRS2App:
         for i, t in enumerate(tranches):
             with st.expander(f"Tranche {i+1}", expanded=False):
                 c1, c2, c3 = st.columns(3)
-                # Input explícito de Vesting vs Expiration
-                t_vest = c1.number_input(f"Vesting (Anos) {i}", value=float(t.vesting_date), key=f"bn_v_{i}")
+                
+                t_vest = c1.number_input(
+                    f"Vesting (Anos) {i}", 
+                    value=float(t.vesting_date), 
+                    key=f"bn_v_{i}",
+                    help="Período de carência até o direito se tornar exercível. Define a barreira de Forfeiture na árvore."
+                )
                 
                 def_exp = t.expiration_date if t.expiration_date else analysis.option_life_years
-                t_life = c2.number_input(f"Vencimento (Anos) {i}", value=float(def_exp), key=f"bn_l_{i}")
+                t_life = c2.number_input(
+                    f"Vencimento (Anos) {i}", 
+                    value=float(def_exp), 
+                    key=f"bn_l_{i}",
+                    help="Prazo contratual total da opção (Life). Define o tamanho da árvore binomial."
+                )
                 
-                t_prop = c3.number_input(f"Peso % {i}", value=float(t.proportion*100), key=f"bn_p_{i}")/100
+                t_prop = c3.number_input(
+                    f"Peso % {i}", 
+                    value=float(t.proportion*100), 
+                    key=f"bn_p_{i}",
+                    help="Proporção desta tranche em relação ao total outorgado."
+                )/100
                 
-                c4, c5 = st.columns(2)
-                t_lock = c4.number_input(f"Lockup (Anos) {i}", value=analysis.lockup_years, key=f"bn_lk_{i}")
-                t_m = c5.number_input(f"Múltiplo M (Ex. Antecipado) {i}", value=analysis.early_exercise_multiple, key=f"bn_m_{i}")
+                c4, c5, c6 = st.columns(3)
+                t_lock = c4.number_input(
+                    f"Lockup (Anos) {i}", 
+                    value=analysis.lockup_years, 
+                    key=f"bn_lk_{i}",
+                    help="Período de restrição de venda pós-exercício. Reduz o valor do ativo no nó de exercício (Modelo Chaffe)."
+                )
+                
+                t_m = c5.number_input(
+                    f"Múltiplo M (Ex. Antecipado) {i}", 
+                    value=analysis.early_exercise_multiple, 
+                    key=f"bn_m_{i}",
+                    help="Fator de exercício subótimo. O funcionário exerce se Preço > M * Strike. Geralmente 2.0x a 2.5x."
+                )
+
+                # NOVO CAMPO: Correção do Strike
+                t_infl = c6.number_input(
+                    f"Correção Strike (% a.a.) {i}",
+                    value=4.5 if analysis.has_strike_correction else 0.0,
+                    key=f"bn_inf_{i}",
+                    help="Taxa anual de correção do preço de exercício (ex: IGPM, IPCA+Spread). O Strike aumenta a cada passo da árvore."
+                ) / 100
                 
                 inputs.append({
                     "vesting": t_vest, "T_life": t_life, "prop": t_prop,
-                    "lockup": t_lock, "m": t_m
+                    "lockup": t_lock, "m": t_m, "infl": t_infl
                 })
 
         if st.button("Calcular (Binomial)", type="primary"):
@@ -299,12 +333,12 @@ class IFRS2App:
             for idx, inp in enumerate(inputs):
                 fv = FinancialMath.binomial_custom_optimized(
                     S=S, K=K, r=r, vol=vol, q=q, 
-                    vesting_years=inp["vesting"], # Define quando o exercício se torna possível
+                    vesting_years=inp["vesting"], 
                     turnover_w=analysis.turnover_rate,
                     multiple_M=inp["m"],
                     hurdle_H=0.0,
-                    T_years=inp["T_life"],        # Define o final da árvore
-                    inflacao_anual=0.0, 
+                    T_years=inp["T_life"],        
+                    inflacao_anual=inp["infl"],  # Passando o valor do input da UI
                     lockup_years=inp["lockup"]
                 )
                 w_fv = fv * inp["prop"]
@@ -313,6 +347,7 @@ class IFRS2App:
                     "Tranche": idx+1, 
                     "Vesting": inp["vesting"], 
                     "Vencimento": inp["T_life"],
+                    "Strike Corr.": f"{inp['infl']*100:.1f}%",
                     "FV Unit": fv, 
                     "FV Ponderado": w_fv
                 })
@@ -332,9 +367,19 @@ class IFRS2App:
             with st.expander(f"Tranche {i+1}", expanded=True):
                 c1, c2, c3 = st.columns(3)
                 # Para RSU, geralmente o pagamento é no Vesting, mas pode haver diferimento
-                t_vest = c1.number_input(f"Vesting/Pagamento (Anos) {i}", value=float(t.vesting_date), key=f"rsu_v_{i}")
+                t_vest = c1.number_input(
+                    f"Vesting/Pagamento (Anos) {i}", 
+                    value=float(t.vesting_date), 
+                    key=f"rsu_v_{i}",
+                    help="Data esperada de liquidação/entrega das ações."
+                )
                 
-                t_lock = c2.number_input(f"Lock-up (Anos) {i}", value=float(analysis.lockup_years), key=f"rsu_l_{i}")
+                t_lock = c2.number_input(
+                    f"Lock-up (Anos) {i}", 
+                    value=float(analysis.lockup_years), 
+                    key=f"rsu_l_{i}",
+                    help="Restrição de venda após o recebimento das ações."
+                )
                 t_prop = c3.number_input(f"Proporção % {i}", value=float(t.proportion * 100), key=f"rsu_prop_{i}") / 100
                 
                 # Volatilidade só é necessária se houver Lockup (Chaffe Model)
