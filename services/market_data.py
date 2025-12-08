@@ -11,11 +11,11 @@ import streamlit as st
 class MarketDataService:
     """
     Serviço de Dados de Mercado (Backend).
-    Versão Otimizada: Integra lógica robusta de scraping da B3 (Sistema Pregão) baseada no script funcional.
+    Versão Otimizada: Integra lógica robusta de scraping da B3 (Sistema Pregão).
     """
 
     # =========================================================================
-    # MÓDULO 1: VOLATILIDADE (Yahoo Finance + Arch) - MANTIDO IGUAL
+    # MÓDULO 1: VOLATILIDADE (Yahoo Finance + Arch) - MANTIDO
     # =========================================================================
     
     @staticmethod
@@ -38,7 +38,6 @@ class MarketDataService:
                     results[ticker_raw] = {"error": "Sem dados retornados."}
                     continue
                 
-                # Tratamento de colunas yfinance
                 if 'Adj Close' in data.columns: series = data['Adj Close']
                 elif 'Close' in data.columns: series = data['Close']
                 else:
@@ -85,7 +84,7 @@ class MarketDataService:
         return {"summary": summary, "details": results}
 
     # =========================================================================
-    # MÓDULO 2: CURVA DE JUROS DI (B3 Scraping Otimizado - NOVO CÓDIGO)
+    # MÓDULO 2: CURVA DE JUROS DI (B3 Scraping Otimizado - CORRIGIDO)
     # =========================================================================
 
     @staticmethod
@@ -99,18 +98,18 @@ class MarketDataService:
         
         di_code = str(di_code).strip().upper()
         
-        # Caso 1: Código curto "F26"
+        # Caso 1: Código curto "F26" (Padrão antigo ou ticker)
         match_code = re.match(r"([A-Z])(\d{2})", di_code)
         if match_code:
             mes_letra, ano_dois_digitos = match_code.groups()
             if mes_letra in meses:
                 return date(2000 + int(ano_dois_digitos), meses[mes_letra], 1)
 
-        # Caso 2: Formato JAN/26 ou JAN/2026
+        # Caso 2: Formato JAN/26 ou JAN/2026 (Padrão planilha B3)
         match_slash = re.match(r"([A-Z]+)/(\d{2,4})", di_code)
         if match_slash:
             mes_str, ano_str = match_slash.groups()
-            mes = meses.get(mes_str[:3]) # Pega as 3 primeiras letras
+            mes = meses.get(mes_str[:3]) 
             if mes:
                 ano = int(ano_str)
                 if ano < 100: ano += 2000
@@ -120,6 +119,7 @@ class MarketDataService:
 
     @staticmethod
     def gerar_url_di(data_ref: date) -> str:
+        # CORREÇÃO CRÍTICA: Força o formato DD/MM/AAAA para a URL da B3
         d_fmt = data_ref.strftime("%d/%m/%Y")
         return f"https://www2.bmf.com.br/pages/portal/bmfbovespa/boletim1/SistemaPregao_excel1.asp?Data={d_fmt}&Mercadoria=DI1&XLS=true"
 
@@ -127,9 +127,7 @@ class MarketDataService:
     @st.cache_data(ttl=3600, show_spinner=False)
     def get_di_data_b3(reference_date: date) -> pd.DataFrame:
         """
-        Busca a curva DI completa usando a lógica robusta do script do usuário.
-        Retorna DataFrame padronizado para o Icarus:
-        ['Vencimento_Str', 'Vencimento_Data', 'Dias_Corridos', 'Taxa']
+        Busca a curva DI completa usando a lógica robusta do script funcional.
         """
         url = MarketDataService.gerar_url_di(reference_date)
         session = requests.Session()
@@ -141,22 +139,21 @@ class MarketDataService:
             
             # Leitura robusta
             dfs = pd.read_html(response.content, encoding='latin1', decimal=',', thousands='.')
-            
             if not dfs: return pd.DataFrame()
 
-            # Tenta pegar a tabela [6] conforme script funcional, ou busca dinâmica
+            # Lógica de Busca da Tabela (Igual ao script funcional)
             df_alvo = None
-            if len(dfs) > 6:
-                # Verifica se a tabela 6 parece correta
-                check_df = dfs[6]
-                s_df = str(check_df.values).upper()
-                if 'DI1' in s_df or 'VENC' in s_df:
-                    df_alvo = check_df
             
-            # Fallback: Busca dinâmica se a tabela 6 falhar
+            # Tenta direto a tabela 6 (comum) ou busca por conteúdo
+            if len(dfs) >= 7:
+                 # Verificação rápida
+                 if 'VENC' in str(dfs[6].values).upper():
+                     df_alvo = dfs[6]
+            
             if df_alvo is None:
                 for df in dfs:
                     s_df = str(df.values).upper()
+                    # Procura colunas chave
                     if 'VENC' in s_df and ('AJUSTE' in s_df or 'ÚLT. PREÇO' in s_df):
                         df_alvo = df
                         break
@@ -165,8 +162,7 @@ class MarketDataService:
 
             df = df_alvo.copy()
             
-            # Limpeza de cabeçalho (Linha 1 costuma ser o header no xls da B3)
-            # Procura a linha que contém "VENC" ou "AJUSTE"
+            # Limpeza de cabeçalho: Procura a linha que contém "VENC" e "AJUSTE"
             header_idx = -1
             for idx, row in df.iterrows():
                 row_str = row.astype(str).str.upper().values
@@ -182,11 +178,11 @@ class MarketDataService:
             mapa_colunas = {
                 'VENC.': 'Vencimento_Str', 
                 'AJUSTE': 'Taxa',
+                'PREÇO AJUSTE': 'Taxa',
                 'ÚLT. PREÇO': 'Taxa', 
                 'ULT. PREÇO': 'Taxa'
             }
             
-            # Renomeia colunas
             cols_found = {}
             for c in df.columns:
                 c_clean = str(c).strip().upper()
@@ -195,7 +191,6 @@ class MarketDataService:
             
             df = df.rename(columns=cols_found)
             
-            # Verifica colunas essenciais
             if 'Vencimento_Str' not in df.columns or 'Taxa' not in df.columns:
                 return pd.DataFrame()
 
@@ -205,6 +200,8 @@ class MarketDataService:
                     venc_str = row['Vencimento_Str']
                     taxa_raw = row['Taxa']
                     
+                    if pd.isna(venc_str) or pd.isna(taxa_raw): continue
+
                     # Converte Vencimento
                     dt_venc = MarketDataService._parse_b3_maturity_code(venc_str)
                     if not dt_venc: continue
@@ -214,10 +211,9 @@ class MarketDataService:
                         taxa_raw = taxa_raw.replace('.', '').replace(',', '.')
                     taxa_val = float(taxa_raw)
                     
-                    # Lógica Icarus: Normalizar para decimal (12.50 -> 0.1250)
+                    # Normalização para decimal (ex: 12.50 -> 0.1250)
                     if taxa_val > 0.50: taxa_val = taxa_val / 100.0
                     
-                    # Cálculo Dias Corridos (Essencial para o Valuation)
                     dias_corridos = (dt_venc - reference_date).days
                     
                     if dias_corridos > 0:
@@ -240,30 +236,21 @@ class MarketDataService:
 
     @staticmethod
     def get_closest_di_vertex(target_date: date, df_di: pd.DataFrame) -> Tuple[str, float, str]:
-        """Encontra o vértice mais próximo (usado pela UI do Icarus)."""
         if df_di.empty: return ("N/A", 0.1075, "Erro: Sem dados B3")
-
         df_calc = df_di.copy()
         df_calc['diff_days'] = df_calc['Vencimento_Data'].apply(lambda x: abs((x - target_date).days))
-        
         closest = df_calc.loc[df_calc['diff_days'].idxmin()]
-        
         msg = "Sucesso"
         if closest['diff_days'] > 180: msg = f"Aviso: Vértice distante ({closest['diff_days']} dias)"
-            
         return (closest['Vencimento_Str'], closest['Taxa'], msg)
 
     @staticmethod
     def interpolate_di_rate(target_years: float, curve_df: pd.DataFrame) -> float:
-        """Interpola linearmente a taxa na curva."""
         if curve_df.empty: return 0.1075
-        
         target_days = target_years * 365.0
         df_sort = curve_df.sort_values('Dias_Corridos')
         x = df_sort['Dias_Corridos'].values
         y = df_sort['Taxa'].values
-        
         if target_days <= x[0]: return y[0]
         if target_days >= x[-1]: return y[-1]
-        
         return float(np.interp(target_days, x, y))
