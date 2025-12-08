@@ -73,41 +73,53 @@ class DocumentService:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash')
         
-        # Prompt otimizado para extração JSON
+        # Prompt Atualizado com Lógica de IFRS 2 e Valuation Explícito
         prompt = f"""
-        - Você é um Atuário Sênior e Especialista em IFRS 2. Sua filosofia é a PARCIMÔNIA: Utilize sempre o modelo mais simples possível.
-        - Monte Carlo: APENAS se houver 'Market Conditions' (ex: gatilhos de TSR, preço da ação alvo). NÃO recomende Monte Carlo apenas por causa de vesting acelerado ou turnover; isso se ajusta na quantidade/prazo, não no modelo de preço.
-        - RSU/Matching: Se Strike == 0 (ou simbólico), o modelo É 'RSU' (Valor da ação descontado de dividendos). Tranches diferentes são tratadas separadamente.
-        - Binomial: Para opções com lock-up ou exercício antecipado.
+        Você é um Consultor Sênior em Remuneração Executiva e Especialista em IFRS 2 (CPC 10).
+        Sua tarefa é analisar o contrato fornecido e gerar um JSON estruturado.
         
-        TEXTO:
+        CONTEXTO DE ANÁLISE (DIRETRIZES RÍGIDAS):
+        1. **Resumo do Programa**: Deve ser detalhado e categorizado (Instrumento, Vesting, Liquidação, Forfeiture, Aceleração, Lock-up).
+        2. **Parâmetros de Valuation (CRÍTICO)**: Não apenas liste os números. Você DEVE EXPLICITAR O IMPACTO NO FAIR VALUE (FV) para o usuário final da ferramenta:
+           - **Instrumento**: Se Ações/Opções (Equity-settled) -> FV fixado na Outorga (não remensura). Se Dinheiro (Cash-settled) -> Remensurado.
+           - **Vesting de Tempo**: Citar que não ajusta o FV unitário, mas impacta a quantidade (Turnover).
+           - **Graded Vesting (Tranches)**: Explicitar que "O cálculo do FV deve ser segregado por Tranche individual".
+           - **Performance de Mercado (TSR)**: "Deve ser incorporada NO cálculo do FV (Monte Carlo)".
+           - **Performance Não-Mercado (EBITDA)**: "Não impacta o FV unitário, ajusta-se a quantidade esperada (Vesting Condition)".
+           - **Lock-up**: "Deve ser aplicado desconto de iliquidez (Chaffe) sobre o FV".
+           - **Forfeiture/Turnover**: "Ajusta a quantidade de instrumentos, aplicado fora do modelo de precificação unitária".
+
+        TEXTO DO CONTRATO:
         {text[:45000]}
 
-        Extraia os parâmetros para precificação de opções.
         SAÍDA JSON (ESTRITA):
         {{
-            "program_summary": "Resumo executivo do programa: Quem recebe, qual o objetivo, quantidade total de instrumentos e regras de desligamento (Bad/Good leaver).",
-            "valuation_params": "Resumo dos parâmetros quantitativos: Vesting, Lock-up, Dividendos, Correção de Strike e Liquidação.",
-            "deep_rationale": "Justificativa técnica...",
-            "summary": "Resumo geral curto.",
+            "program_summary": "Resumo estruturado em tópicos: Instrumento, Condições de Vesting, Cronograma, Liquidação (Ações/Caixa), Regras de Forfeiture (Good/Bad Leaver), Aceleração (Change of Control) e Lock-up.",
+            
+            "valuation_params": "Texto explicativo focado no IFRS 2. Exemplo: '1. Instrumento: Opções (Equity-settled), FV fixado na data de outorga. 2. Vesting: Graded (3 tranches), exige cálculo de FV individual para cada tranche. 3. Lock-up: Identificado (2 anos), aplicar desconto de iliquidez (Chaffe). 4. Performance: Não há gatilhos de mercado, utilizar Black-Scholes ou Binomial padrão.'",
+            
+            "summary": "Um parágrafo curto resumindo o plano.",
+            
+            "contract_features": "Lista curta das principais cláusulas.",
+            
             "model_data": {{
                 "recommended_model": "RSU" | "Binomial" | "Black-Scholes" | "Monte Carlo",
-                "deep_rationale": "Justificativa técnica alinhada à filosofia de parcimônia. Se for RSU, explique que é devido à ausência de opcionalidade (Strike Zero).",
-                "justification": "Frase curta.",
-                "comparison": "Comparação com outros modelos.",
+                "deep_rationale": "Justificativa técnica da escolha do modelo baseada na PARCIMÔNIA. Se Strike for Zero (Matching/RSU), USE 'RSU'. Se houver TSR, USE 'Monte Carlo'. Se houver Lock-up/Americanas, USE 'Binomial'.",
+                "justification": "Frase curta para UI.",
+                "comparison": "Comparação breve.",
                 "pros": ["Pró 1"], 
                 "cons": ["Contra 1"],
                 "params": {{
-                    "option_life": <float>,
+                    "option_life": <float, Estimativa de vida da opção em anos>,
                     "strike_price": <float>,
-                    "strike_is_zero": <bool>,
-                    "turnover_rate": <float>,
-                    "early_exercise_factor": <float>,
-                    "lockup_years": <float>,
+                    "strike_is_zero": <bool, true se for RSU/Matching Shares>,
+                    "turnover_rate": <float, ex: 0.05 para 5%>,
+                    "early_exercise_factor": <float, geralmente 2.0>,
+                    "lockup_years": <float, anos de restrição pós-vesting>,
                     "has_strike_correction": <bool>,
                     "has_market_condition": <bool>,
                     "vesting_schedule": [
-                        {{"period_years": <float>, "percentage": <float>}}
+                        {{"period_years": <float>, "percentage": <float, ex: 0.25>}}
                     ]
                 }}
             }}
@@ -122,7 +134,6 @@ class DocumentService:
             return DocumentService._map_json_to_domain(data)
             
         except Exception as e:
-            # Em produção, logar o erro. Aqui retornamos o Mock por segurança/fallback
             print(f"Erro na API Gemini: {e}")
             return DocumentService.mock_analysis(text)
 
