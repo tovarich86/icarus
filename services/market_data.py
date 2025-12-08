@@ -11,8 +11,7 @@ import streamlit as st
 class MarketDataService:
     """
     Serviço de Dados de Mercado (Backend).
-    Versão Corrigida: Implementa prioridade de colunas para resolver conflitos da B3
-    (ex: 'VENCTO' e múltiplas colunas de preço).
+    Versão Corrigida: Normalização de escala (148.9 -> 14.89%) e prioridade de colunas.
     """
 
     # =========================================================================
@@ -21,7 +20,6 @@ class MarketDataService:
     
     @staticmethod
     def get_peer_group_volatility(tickers: List[str], start_date: date, end_date: date) -> Dict[str, Any]:
-        """Calcula volatilidade histórica."""
         results = {}
         valid_ewma_values = []
         valid_std_values = []
@@ -90,23 +88,16 @@ class MarketDataService:
 
     @staticmethod
     def _parse_b3_maturity_code(di_code: str) -> Optional[date]:
-        """Converte códigos de vencimento (Ex: F26, JAN/26) em objeto date."""
         meses = {"F": 1, "JAN": 1, "G": 2, "FEV": 2, "H": 3, "MAR": 3, 
                  "J": 4, "ABR": 4, "APR": 4, "K": 5, "MAI": 5, "MAY": 5, 
                  "M": 6, "JUN": 6, "N": 7, "JUL": 7, "Q": 8, "AGO": 8, "AUG": 8, 
                  "U": 9, "SET": 9, "SEP": 9, "V": 10, "OUT": 10, "OCT": 10, 
                  "X": 11, "NOV": 11, "Z": 12, "DEZ": 12, "DEC": 12}
-        
         di_code = str(di_code).strip().upper()
-        
-        # Padrão curto: F26
         match_code = re.match(r"([A-Z])(\d{2})", di_code)
         if match_code:
             mes_letra, ano_dois_digitos = match_code.groups()
-            if mes_letra in meses:
-                return date(2000 + int(ano_dois_digitos), meses[mes_letra], 1)
-
-        # Padrão longo: JAN/26
+            if mes_letra in meses: return date(2000 + int(ano_dois_digitos), meses[mes_letra], 1)
         match_slash = re.match(r"([A-Z]+)/(\d{2,4})", di_code)
         if match_slash:
             mes_str, ano_str = match_slash.groups()
@@ -119,7 +110,6 @@ class MarketDataService:
 
     @staticmethod
     def gerar_url_di(data_ref: date) -> str:
-        # Garante o formato DD/MM/AAAA exigido pela B3
         if isinstance(data_ref, str):
             try: data_ref = datetime.strptime(data_ref, "%Y-%m-%d").date()
             except: pass
@@ -129,31 +119,22 @@ class MarketDataService:
     @staticmethod
     @st.cache_data(ttl=3600, show_spinner=False)
     def get_di_data_b3(reference_date: date) -> pd.DataFrame:
-        """
-        Busca a curva DI completa.
-        """
         url = MarketDataService.gerar_url_di(reference_date)
         session = requests.Session()
         session.headers.update({"User-Agent": "Mozilla/5.0"})
 
         try:
             response = session.get(url, timeout=15)
-            # Tenta ler as tabelas HTML
             dfs = pd.read_html(response.content, encoding='latin1', decimal=',', thousands='.')
             if not dfs: return pd.DataFrame()
 
-            # --- ESTRATÉGIA DE SELEÇÃO DE TABELA ---
             df_alvo = None
-            
-            # Tenta direto a tabela 6 (comum na B3) verificando conteúdo
             if len(dfs) >= 7 and 'VENC' in str(dfs[6].values).upper():
                  df_alvo = dfs[6]
             
-            # Fallback: Busca em todas as tabelas
             if df_alvo is None:
                 for df in dfs:
                     s_df = str(df.values).upper()
-                    # Procura palavras-chave de DI Futuro
                     if 'VENC' in s_df and ('AJUSTE' in s_df or 'ÚLT. PREÇO' in s_df):
                         df_alvo = df
                         break
@@ -161,8 +142,6 @@ class MarketDataService:
             if df_alvo is None: return pd.DataFrame()
 
             df = df_alvo.copy()
-            
-            # --- LIMPEZA DE CABEÇALHO ---
             header_idx = -1
             for idx, row in df.iterrows():
                 row_str = row.astype(str).str.upper().values
@@ -174,21 +153,15 @@ class MarketDataService:
                 df.columns = df.iloc[header_idx]
                 df = df.iloc[header_idx+1:].reset_index(drop=True)
 
-            # Normaliza nomes das colunas
             df.columns = [str(c).strip().upper() for c in df.columns]
 
-            # --- SISTEMA DE PRIORIDADE DE COLUNAS (FIX PRINCIPAL) ---
-            # Identifica a coluna de Vencimento
+            # Seleção de Colunas
             col_venc = next((c for c in df.columns if c in ['VENCTO', 'VENC.', 'VENCIMENTO']), None)
-            
-            # Identifica a coluna de Taxa (Prioriza ÚLT. PREÇO para evitar pegar PU ou Médio)
             prioridades_taxa = ['ÚLT. PREÇO', 'ULT. PREÇO', 'PREÇO MÉD.', 'AJUSTE', 'PREÇO AJUSTE']
             col_taxa = next((p for p in prioridades_taxa if p in df.columns), None)
             
-            if not col_venc or not col_taxa:
-                return pd.DataFrame()
+            if not col_venc or not col_taxa: return pd.DataFrame()
 
-            # Renomeia e filtra explicitamente
             df = df.rename(columns={col_venc: 'Vencimento_Str', col_taxa: 'Taxa'})
             df = df[['Vencimento_Str', 'Taxa']]
 
@@ -197,29 +170,24 @@ class MarketDataService:
                 try:
                     venc_str = row['Vencimento_Str']
                     taxa_raw = row['Taxa']
-                    
                     if pd.isna(venc_str) or pd.isna(taxa_raw): continue
-
-                    # Tratamento se vier Series
                     if isinstance(taxa_raw, pd.Series): taxa_raw = taxa_raw.iloc[0]
 
-                    # Converte Data de Vencimento
                     dt_venc = MarketDataService._parse_b3_maturity_code(venc_str)
                     if not dt_venc: continue
                     
-                    # Converte Taxa
                     if isinstance(taxa_raw, str):
                         taxa_raw = taxa_raw.replace('.', '').replace(',', '.')
-                    
                     taxa_val = float(taxa_raw)
                     
-                    # Normalização para decimal (ex: 13.15 -> 0.1315)
-                    # Se vier muito alto (ex: 131.52), divide por 1000 ou 100 conforme escala
-                    # Ajuste conservador para o Icarus (espera decimal < 1.0)
-                    if taxa_val > 50: 
-                        taxa_val = taxa_val / 100.0 # Tenta trazer para 1.31
-                    if taxa_val > 0.50:
-                        taxa_val = taxa_val / 100.0 # Traz para 0.0131
+                    # --- NORMALIZAÇÃO DE ESCALA CORRIGIDA ---
+                    # Se vier > 100 (ex: 148.96 ou 131.52), assume escala 1000x ou 10x percentual
+                    if taxa_val > 100:
+                        taxa_val = taxa_val / 1000.0 # 131.52 -> 0.13152
+                    elif taxa_val > 50: 
+                        taxa_val = taxa_val / 100.0  # Fallback padrão
+                    elif taxa_val > 0.50:
+                        taxa_val = taxa_val / 100.0  # 13.15 -> 0.1315
                     
                     dias_corridos = (dt_venc - reference_date).days
                     
@@ -233,7 +201,6 @@ class MarketDataService:
                 except: continue
             
             if not clean_data: return pd.DataFrame()
-            
             return pd.DataFrame(clean_data).sort_values("Vencimento_Data")
 
         except Exception as e:
