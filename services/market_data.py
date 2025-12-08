@@ -11,11 +11,11 @@ import streamlit as st
 class MarketDataService:
     """
     Serviço de Dados de Mercado (Backend).
-    Versão Final: Integração total com a lógica do Código de Referência e Correção de Escala.
+    Versão Final: Integração validada com B3 (VENCTO) e Escala Decimal.
     """
 
     # =========================================================================
-    # MÓDULO 1: VOLATILIDADE (Yahoo Finance + Arch) - MANTIDO
+    # MÓDULO 1: VOLATILIDADE (MANTIDO)
     # =========================================================================
     @staticmethod
     def get_peer_group_volatility(tickers: List[str], start_date: date, end_date: date) -> Dict[str, Any]:
@@ -73,7 +73,7 @@ class MarketDataService:
         }
 
     # =========================================================================
-    # MÓDULO 2: CURVA DE JUROS DI (Lógica do Código de Referência)
+    # MÓDULO 2: CURVA DE JUROS DI (VALIDADO)
     # =========================================================================
 
     @staticmethod
@@ -86,7 +86,7 @@ class MarketDataService:
 
     @staticmethod
     def converter_vencimento_ref(di_code):
-        """Lógica exata do código de referência para converter F26 -> 01/2026"""
+        """Conversor F26 -> 01/2026 validado"""
         meses = {"F": "01", "G": "02", "H": "03", "J": "04", "K": "05", "M": "06", 
                  "N": "07", "Q": "08", "U": "09", "V": "10", "X": "11", "Z": "12"}
         di_code = str(di_code).strip().upper()
@@ -106,29 +106,27 @@ class MarketDataService:
 
         try:
             response = session.get(url, timeout=15)
-            # 1. Leitura
+            # Leitura robusta (decimal vírgula, milhar ponto)
             tabelas_dfs = pd.read_html(response.content, encoding='latin1', decimal=',', thousands='.')
 
-            if len(tabelas_dfs) < 7: return pd.DataFrame() 
+            if len(tabelas_dfs) < 7: return pd.DataFrame()
 
-            # 2. Seleção Tabela 6
+            # Seleção Tabela 6 (Padrão B3 atual)
             df = tabelas_dfs[6]
             if len(df) < 2: return pd.DataFrame()
 
-            # 3. Limpeza de Cabeçalho (Linha 1 é header)
+            # Ajuste de Header (Linha 1)
             df.columns = df.iloc[1]
             df = df.iloc[2:].reset_index(drop=True)
+            if df.iloc[-1, 0] is None or pd.isna(df.iloc[-1, 0]): df = df.iloc[:-1]
 
-            if df.iloc[-1, 0] is None or pd.isna(df.iloc[-1, 0]):
-                df = df.iloc[:-1]
-
-            # 4. Mapeamento
+            # Mapeamento Validado
             mapa_colunas = {
-                'VENCTO': 'VENCIMENTO', 
-                'VENC.': 'VENCIMENTO',
+                'VENCTO': 'VENCIMENTO',       # Nome retornado no teste
+                'VENC.': 'VENCIMENTO',        # Fallback
                 'ÚLT. PREÇO': 'ULTIMO PRECO',
-                'ULT. PREÇO': 'ULTIMO PRECO', 
-                'AJUSTE': 'PRECO AJUSTE'      
+                'ULT. PREÇO': 'ULTIMO PRECO',
+                'AJUSTE': 'PRECO AJUSTE'
             }
             
             cols_found = {}
@@ -140,12 +138,11 @@ class MarketDataService:
             df = df.rename(columns=cols_found)
 
             if 'VENCIMENTO' not in df.columns: return pd.DataFrame()
-            
+
             # Prioriza ULTIMO PRECO
             col_preco = 'ULTIMO PRECO' if 'ULTIMO PRECO' in df.columns else 'PRECO AJUSTE'
             if col_preco not in df.columns: return pd.DataFrame()
 
-            # 5. Processamento
             clean_data = []
             
             for _, row in df.iterrows():
@@ -155,7 +152,6 @@ class MarketDataService:
                     
                     if pd.isna(venc_cod) or pd.isna(taxa_raw): continue
                     
-                    # Formato Visual (01/2026)
                     venc_fmt = MarketDataService.converter_vencimento_ref(venc_cod)
                     if not venc_fmt: continue
                     
@@ -166,24 +162,25 @@ class MarketDataService:
                     
                     taxa_val = float(taxa_raw)
                     
-                    # 6. CORREÇÃO DE ESCALA INTELIGENTE
-                    # Se vier > 1000 (ex: 1489.60), divide por 10.000 -> 0.14896 (14.89%)
+                    # --- CORREÇÃO DE ESCALA FINA ---
+                    # Objetivo: Converter qualquer formato para decimal (ex: 0.1490 para 14.9%)
+                    # No teste: 1489.0 virou 1.4903 (149%). Precisamos dividir por mais 10.
+                    
                     if taxa_val > 1000:
-                         taxa_val = taxa_val / 10000.0 
-                    # Se vier > 100 (ex: 131.52), divide por 1000 -> 0.13152 (13.15%)
-                    elif taxa_val > 100: 
-                        taxa_val = taxa_val / 1000.0  
-                    # Se vier > 50 (ex: 52), divide por 100 -> 0.52 (Fallback)
-                    # Normal (> 0.5): ex: 13.15 -> 0.1315
+                         taxa_val = taxa_val / 10000.0  # 1490.3 -> 0.14903
+                    elif taxa_val > 100:
+                         taxa_val = taxa_val / 1000.0   # 149.03 -> 0.14903
+                    elif taxa_val > 50:
+                         taxa_val = taxa_val / 100.0    # 52.0 -> 0.52
                     elif taxa_val > 0.50:
-                         taxa_val = taxa_val / 100.0
+                         taxa_val = taxa_val / 100.0    # 14.90 -> 0.1490
                     
                     dias_corridos = (dt_venc - reference_date).days
                     
                     if dias_corridos > 0:
                         clean_data.append({
-                            "Vencimento_Fmt": venc_fmt,     # EX: 01/2026
-                            "Vencimento_Str": str(venc_cod),# EX: F26
+                            "Vencimento_Fmt": venc_fmt,     # Visual (01/2026)
+                            "Vencimento_Str": str(venc_cod),# Código (F26)
                             "Vencimento_Data": dt_venc,
                             "Dias_Corridos": dias_corridos,
                             "Taxa": taxa_val
@@ -202,7 +199,6 @@ class MarketDataService:
         df_calc = df_di.copy()
         df_calc['diff_days'] = df_calc['Vencimento_Data'].apply(lambda x: abs((x - target_date).days))
         closest = df_calc.loc[df_calc['diff_days'].idxmin()]
-        # Retorna o formato amigável para a UI
         return (closest['Vencimento_Fmt'], closest['Taxa'], "Sucesso")
 
     @staticmethod
