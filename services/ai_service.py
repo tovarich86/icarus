@@ -134,6 +134,7 @@ class DocumentService:
             return DocumentService._map_json_to_domain(data)
             
         except Exception as e:
+            # Em produção, logar o erro. Aqui retornamos o Mock por segurança/fallback
             print(f"Erro na API Gemini: {e}")
             return DocumentService.mock_analysis(text)
 
@@ -171,10 +172,9 @@ class DocumentService:
             except: return default
 
         return PlanAnalysisResult(
-            
             summary=data.get('summary', ''),
-            program_summary=data.get('program_summary', 'Resumo do programa não identificado.'), # <--- NOVO
-            valuation_params=data.get('valuation_params', 'Parâmetros não identificados.'),      # <--- NOVO
+            program_summary=data.get('program_summary', 'Resumo do programa não identificado.'),
+            valuation_params=data.get('valuation_params', 'Parâmetros não identificados.'),
             contract_features=data.get('contract_features', ''),
             methodology_rationale=model_data.get('deep_rationale', ''),
             model_recommended=model_enum,
@@ -233,8 +233,12 @@ class DocumentService:
     def mock_analysis(text: str) -> PlanAnalysisResult:
         """Gera dados fictícios para demonstração (sem API Key)."""
         tranches = [Tranche(1.0, 0.25), Tranche(2.0, 0.25), Tranche(3.0, 0.25), Tranche(4.0, 0.25)]
+        
+        # CORREÇÃO APLICADA: Adicionados program_summary e valuation_params
         return PlanAnalysisResult(
             summary="[MOCK] Plano simulado: 4 tranches, correção de strike (IGPM).",
+            program_summary="[MOCK] Resumo: Plano de Opções sobre Ações (Stock Options). Vesting em 4 tranches anuais de 25%. Liquidação física.",
+            valuation_params="[MOCK] Parâmetros: Modelo Binomial recomendado. Considerar Lock-up de 2 anos (Desconto de Iliquidez) e Correção de Strike pelo IGPM.",
             contract_features="[MOCK] Vesting 4 anos (25% a.a), Correção Monetária Strike.",
             methodology_rationale="[MOCK] Binomial recomendado devido a barreiras complexas.",
             model_recommended=PricingModelType.BINOMIAL, 
