@@ -1,6 +1,6 @@
 """
 Módulo de Interface do Usuário (UI).
-Versão Definitiva: Backend Otimizado + UI Rica + Seletor de Volatilidade.
+Versão Corrigida: Fix do State Update em Widgets de Volatilidade e Taxa.
 """
 
 import streamlit as st
@@ -26,7 +26,7 @@ class IFRS2App:
     def run(self) -> None:
         """Método principal de execução da interface (Entry Point)."""
         st.set_page_config(page_title="Icarus Valuation", layout="wide", page_icon="🛡️")
-        st.title("🛡️ Icarus: Valuation IFRS 2 (Definitivo)")
+        st.title("🛡️ Icarus: Valuation IFRS 2 (Stable)")
         
         # --- Inicialização de Estado (Session State) ---
         if 'analysis_result' not in st.session_state:
@@ -66,7 +66,7 @@ class IFRS2App:
                 self._handle_analysis(uploaded_files, manual_text, gemini_key)
             
             st.divider()
-            st.caption("v.Release 1.0 - Hybrid UI")
+            st.caption("v.Release 1.1 - State Fix")
 
         # --- ÁREA PRINCIPAL ---
         if st.session_state['analysis_result']:
@@ -133,14 +133,12 @@ class IFRS2App:
     def _render_dashboard(self, analysis: PlanAnalysisResult, full_text: str, api_key: str) -> None:
         """Renderiza o painel principal de valuation."""
         
-        # --- Seção 1: Diagnóstico (Restaurado para Alta Riqueza de Detalhes) ---
+        # --- Seção 1: Diagnóstico ---
         st.subheader("2. Diagnóstico e Parâmetros")
         
-        # Container de Diagnóstico Visual
         with st.container():
             col_diag_main, col_diag_params = st.columns([1, 1])
             
-            # Coluna Esquerda: Classificação e Racional
             with col_diag_main:
                 st.markdown("### 📋 Classificação IFRS 2")
                 settlement = getattr(analysis, 'settlement_type', SettlementType.EQUITY_SETTLED)
@@ -157,20 +155,16 @@ class IFRS2App:
                 st.markdown("**Justificativa Metodológica:**")
                 st.info(analysis.methodology_rationale)
 
-            # Coluna Direita: Parâmetros Extraídos (Estilo ZIP restaurado)
             with col_diag_params:
                 st.markdown("### 🧮 Parâmetros de Valuation")
-                
-                # Exibe Valuation Params se disponível, senão o resumo do programa
                 val_params = getattr(analysis, 'valuation_params', None)
                 prog_summary = getattr(analysis, 'program_summary', analysis.summary)
                 
                 if val_params and len(str(val_params)) > 10:
-                    st.warning(val_params) # Box Amarelo de destaque
+                    st.warning(val_params)
                 else:
                     st.info(prog_summary)
                 
-                # Exibição de Resumo do Programa se Valuation Params foi mostrado acima
                 if val_params and len(str(val_params)) > 10:
                     with st.expander("Ver Resumo do Programa"):
                         st.write(prog_summary)
@@ -182,12 +176,10 @@ class IFRS2App:
         
         c_glob1, c_glob2, c_glob3, c_glob4 = st.columns(4)
         
-        # Inputs que afetam todas as tranches
         S = c_glob1.number_input("Preço da Ação (Spot) R$", 0.0, 10000.0, 50.0, help="Preço de fechamento na data base.")
         K = c_glob2.number_input("Preço de Exercício (Strike) R$", 0.0, 10000.0, analysis.strike_price)
         q = c_glob3.number_input("Dividend Yield (% a.a.)", 0.0, 100.0, 4.0) / 100
         
-        # Seletor de Modelo
         opts = [m for m in PricingModelType if m != PricingModelType.UNDEFINED]
         try: idx = opts.index(analysis.model_recommended)
         except ValueError: idx = 0
@@ -202,20 +194,15 @@ class IFRS2App:
         self._manage_tranches_buttons()
         tranches = st.session_state['tranches']
         
-        # Lista para coletar os inputs finais prontos para o cálculo
         calculation_inputs = []
 
-        # Loop de Renderização das Tranches
         for i, t in enumerate(tranches):
             with st.container(border=True):
-                # Cabeçalho da Tranche
                 c_head1, c_head2 = st.columns([1, 4])
                 c_head1.markdown(f"#### Tranche {i+1}")
                 
-                # Definição de Prazo (Vencimento)
                 def_exp = t.expiration_date if t.expiration_date else analysis.option_life_years
                 
-                # Layout de Inputs da Tranche
                 col_t, col_vol, col_rate = st.columns([1.2, 1.5, 1.5])
                 
                 # --- A. DADOS TEMPORAIS ---
@@ -224,8 +211,7 @@ class IFRS2App:
                         f"Vencimento (Anos)", 
                         value=float(def_exp), 
                         min_value=0.01, step=0.1, 
-                        key=f"t_exp_{i}",
-                        help="Prazo até o vencimento da opção (T)."
+                        key=f"t_exp_{i}"
                     )
                     t_vest = st.number_input(
                         f"Vesting (Anos)", 
@@ -240,126 +226,125 @@ class IFRS2App:
                         key=f"t_prop_{i}"
                     ) / 100
 
-                # --- B. VOLATILIDADE (Input + Popover Inteligente) ---
+                # --- B. VOLATILIDADE (CORREÇÃO DE STATE) ---
                 with col_vol:
                     st.markdown("**Volatilidade**")
                     cv_input, cv_pop = st.columns([0.85, 0.15])
                     
-                    # Chave única para o valor da volatilidade desta tranche
-                    key_vol = f"vol_val_{i}"
-                    if key_vol not in st.session_state: 
-                        st.session_state[key_vol] = 30.00 # Default 30%
+                    key_vol_val = f"vol_val_{i}"
+                    key_vol_widget = f"input_vol_{i}"
                     
-                    # Input Principal (Editável)
+                    # Inicializa state se necessário
+                    if key_vol_val not in st.session_state: 
+                        st.session_state[key_vol_val] = 30.00
+                    
+                    # Widget principal usa o valor do state
                     vol_final = cv_input.number_input(
                         "Anual (%)", 
-                        value=st.session_state[key_vol], 
-                        key=f"input_vol_{i}",
+                        value=st.session_state[key_vol_val], 
+                        key=key_vol_widget,
                         format="%.2f", step=0.5, label_visibility="collapsed"
                     )
-                    st.session_state[key_vol] = vol_final
+                    # Sincroniza inversamente (se usuário digitar manualmente)
+                    st.session_state[key_vol_val] = vol_final
 
-                    # Popover (Botão Lupa)
-                    with cv_pop.popover("🔍", help="Buscar Volatilidade Histórica (Yahoo Finance)"):
-                        st.markdown("###### Calcular Volatilidade Histórica")
+                    # Popover Inteligente
+                    with cv_pop.popover("🔍", help="Buscar Volatilidade Histórica"):
+                        st.markdown("###### Calcular Volatilidade")
                         
-                        p_tickers = st.text_area("Tickers (ex: VALE3)", "VALE3", key=f"p_tk_{i}", height=68)
+                        p_tickers = st.text_area("Tickers", "VALE3", key=f"p_tk_{i}", height=68)
                         d_default_start = date.today() - timedelta(days=365*3)
                         p_start = st.date_input("Início", value=d_default_start, key=f"p_d1_{i}")
                         p_end = st.date_input("Fim", value=date.today(), key=f"p_d2_{i}")
                         
-                        # Chave para armazenar resultado temporário da busca
                         key_vol_search = f"vol_search_res_{i}"
                         
                         if st.button("Buscar Dados", key=f"btn_calc_vol_{i}"):
                             ticker_list = [x.strip() for x in p_tickers.split(',') if x.strip()]
-                            with st.spinner("Baixando e Calculando..."):
+                            with st.spinner("Calculando..."):
                                 res = MarketDataService.get_peer_group_volatility(ticker_list, p_start, p_end)
-                                st.session_state[key_vol_search] = res # Persiste no state para não sumir
+                                st.session_state[key_vol_search] = res
                         
-                        # Se houver resultado armazenado, mostra opções
                         if key_vol_search in st.session_state:
                             res = st.session_state[key_vol_search]
-                            
                             if "summary" in res and res['summary']['count_valid'] > 0:
                                 summ = res['summary']
-                                st.success("Cálculo Realizado com Sucesso!")
+                                st.success("Cálculo Sucesso!")
                                 
-                                # Opções disponíveis
                                 opts_vol = {
-                                    f"EWMA (Recente): {summ['mean_ewma']*100:.2f}%": summ['mean_ewma']*100,
-                                    f"GARCH (Projetado): {summ['mean_garch']*100:.2f}%": summ['mean_garch']*100,
-                                    f"Histórica (Std): {summ['mean_std']*100:.2f}%": summ['mean_std']*100
+                                    f"EWMA: {summ['mean_ewma']*100:.2f}%": summ['mean_ewma']*100,
+                                    f"GARCH: {summ['mean_garch']*100:.2f}%": summ['mean_garch']*100,
+                                    f"Histórica: {summ['mean_std']*100:.2f}%": summ['mean_std']*100
                                 }
-                                
-                                # Remove opções zeradas
                                 valid_opts = {k: v for k, v in opts_vol.items() if v > 0}
                                 
                                 if valid_opts:
-                                    sel_label = st.radio("Selecione a Métrica:", list(valid_opts.keys()), key=f"radio_vol_{i}")
+                                    sel_label = st.radio("Métrica:", list(valid_opts.keys()), key=f"radio_vol_{i}")
                                     sel_val = valid_opts[sel_label]
                                     
                                     if st.button("Aplicar Seleção", key=f"btn_apply_vol_{i}"):
-                                        st.session_state[key_vol] = sel_val
+                                        # --- CORREÇÃO AQUI ---
+                                        # Atualiza TANTO o valor de armazenamento QUANTO a chave do widget
+                                        st.session_state[key_vol_val] = sel_val
+                                        st.session_state[key_vol_widget] = sel_val 
                                         st.rerun()
                                 else:
-                                    st.warning("Valores zerados retornados.")
+                                    st.warning("Valores zerados.")
                             elif "details" in res:
-                                st.error("Erro ao buscar dados.")
+                                st.error("Erro na busca.")
                                 st.write(res['details'])
 
-                # --- C. TAXA DI (Input + Popover) ---
+                # --- C. TAXA DI (CORREÇÃO DE STATE) ---
                 with col_rate:
                     st.markdown("**Taxa Livre de Risco (DI)**")
                     cr_input, cr_pop = st.columns([0.85, 0.15])
                     
-                    key_rate = f"rate_val_{i}"
-                    if key_rate not in st.session_state:
-                        st.session_state[key_rate] = 10.75 # Default Selic
+                    key_rate_val = f"rate_val_{i}"
+                    key_rate_widget = f"input_rate_{i}"
+                    
+                    if key_rate_val not in st.session_state:
+                        st.session_state[key_rate_val] = 10.75
                     
                     rate_final = cr_input.number_input(
                         "Anual (%)", 
-                        value=st.session_state[key_rate], 
-                        key=f"input_rate_{i}",
+                        value=st.session_state[key_rate_val], 
+                        key=key_rate_widget,
                         format="%.2f", step=0.01, label_visibility="collapsed"
                     )
-                    st.session_state[key_rate] = rate_final
+                    st.session_state[key_rate_val] = rate_final
 
-                    # Popover (Botão Gráfico)
-                    with cr_pop.popover("📉", help="Buscar Taxa na Curva DI (B3)"):
-                        st.markdown("###### Buscar Vértice na Curva DI")
-                        
-                        p_ref_date = st.date_input("Data Base", value=date.today(), key=f"p_r_d1_{i}")
-                        days_to_add = int(t_exp * 365)
-                        target_suggested = p_ref_date + timedelta(days=days_to_add)
-                        p_target_date = st.date_input("Vencimento Alvo", value=target_suggested, key=f"p_r_d2_{i}")
+                    with cr_pop.popover("📉", help="Buscar Taxa B3"):
+                        st.markdown("###### Buscar Vértice DI")
+                        p_ref = st.date_input("Data Base", value=date.today(), key=f"p_r_d1_{i}")
+                        tgt = p_ref + timedelta(days=int(t_exp * 365))
+                        p_tgt = st.date_input("Vencimento", value=tgt, key=f"p_r_d2_{i}")
                         
                         if st.button("Buscar B3", key=f"btn_calc_rate_{i}"):
-                            with st.spinner(f"Consultando B3 em {p_ref_date}..."):
-                                df_di = MarketDataService.get_di_data_b3(p_ref_date)
+                            with st.spinner("Consultando B3..."):
+                                df_di = MarketDataService.get_di_data_b3(p_ref)
                             
                             if not df_di.empty:
-                                v_str, taxa_enc, msg = MarketDataService.get_closest_di_vertex(p_target_date, df_di)
-                                st.session_state[key_rate] = taxa_enc * 100
-                                st.success(f"Taxa: {taxa_enc*100:.2f}%")
+                                v_str, taxa, msg = MarketDataService.get_closest_di_vertex(p_tgt, df_di)
+                                new_rate = taxa * 100
+                                
+                                # --- CORREÇÃO AQUI ---
+                                st.session_state[key_rate_val] = new_rate
+                                st.session_state[key_rate_widget] = new_rate
+                                
+                                st.success(f"Taxa: {new_rate:.2f}%")
                                 st.caption(f"Vértice: {v_str}")
-                                if "Aviso" in msg: st.warning(msg)
                                 st.rerun()
                             else:
-                                st.error("Não foi possível obter a curva DI (Feriado ou Indisponível).")
+                                st.error("Erro B3/Feriado.")
 
-                # Coleta os dados desta tranche para o cálculo final
                 calculation_inputs.append({
                     "TrancheID": i+1,
                     "T": t_exp,
                     "Vesting": t_vest,
                     "Prop": t_prop,
-                    "Vol": st.session_state[key_vol] / 100.0,
-                    "r": st.session_state[key_rate] / 100.0,
-                    "S": S,
-                    "K": K,
-                    "q": q,
-                    "Model": active_model,
+                    "Vol": st.session_state[key_vol_val] / 100.0,
+                    "r": st.session_state[key_rate_val] / 100.0,
+                    "S": S, "K": K, "q": q, "Model": active_model,
                     "Lockup": analysis.lockup_years,
                     "M": analysis.early_exercise_multiple,
                     "Turnover": analysis.turnover_rate,
@@ -368,12 +353,10 @@ class IFRS2App:
 
         st.divider()
 
-        # --- Seção 5: Execução do Cálculo ---
         if st.button("🏁 Calcular Fair Value Total", type="primary", use_container_width=True):
             self._execute_final_calculation(calculation_inputs)
 
     def _manage_tranches_buttons(self):
-        """Botões para adicionar/remover tranches dinamicamente."""
         c1, c2 = st.columns(2)
         if c1.button("➕ Adicionar Nova Tranche"):
             last_t = st.session_state['tranches'][-1] if st.session_state['tranches'] else None
@@ -388,39 +371,28 @@ class IFRS2App:
                 st.rerun()
 
     def _execute_final_calculation(self, inputs: List[Dict]):
-        """
-        Itera sobre os inputs preparados e chama a engine financeira adequada.
-        """
         results = []
         total_fv = 0.0
         
         st.markdown("### 📊 Resultados do Valuation")
-        
         progress_bar = st.progress(0)
         
         for idx, item in enumerate(inputs):
             model = item['Model']
             fv_unit = 0.0
-            
             try:
                 if model == PricingModelType.BLACK_SCHOLES_GRADED:
                     fv_unit = FinancialMath.bs_call(
                         S=item['S'], K=item['K'], T=item['T'], 
                         r=item['r'], sigma=item['Vol'], q=item['q']
                     )
-                
                 elif model == PricingModelType.BINOMIAL:
                     fv_unit = FinancialMath.binomial_custom_optimized(
                         S=item['S'], K=item['K'], r=item['r'], vol=item['Vol'], q=item['q'],
-                        vesting_years=item['Vesting'],
-                        turnover_w=item['Turnover'],
-                        multiple_M=item['M'],
-                        hurdle_H=0.0,
-                        T_years=item['T'],
-                        inflacao_anual=item['StrikeCorr'],
-                        lockup_years=item['Lockup']
+                        vesting_years=item['Vesting'], turnover_w=item['Turnover'],
+                        multiple_M=item['M'], hurdle_H=0.0, T_years=item['T'],
+                        inflacao_anual=item['StrikeCorr'], lockup_years=item['Lockup']
                     )
-                
                 elif model == PricingModelType.RSU:
                     base_val = item['S'] * np.exp(-item['q'] * item['T'])
                     discount = 0.0
@@ -429,14 +401,11 @@ class IFRS2App:
                             item['Vol'], item['Lockup'], base_val, item['q']
                         )
                     fv_unit = base_val - discount
-                
                 else:
-                    # Fallback (Monte Carlo via Python puro não implementado aqui, requer engine dedicada ou código gerado)
                     fv_unit = FinancialMath.bs_call(
                         S=item['S'], K=item['K'], T=item['T'], 
                         r=item['r'], sigma=item['Vol'], q=item['q']
                     )
-
             except Exception as e:
                 st.error(f"Erro no cálculo da Tranche {item['TrancheID']}: {e}")
                 fv_unit = 0.0
@@ -452,10 +421,8 @@ class IFRS2App:
                 "FV Unitário": fv_unit,
                 "FV Ponderado": fv_weighted
             })
-            
             progress_bar.progress((idx + 1) / len(inputs))
 
-        # --- Exibição Final ---
         c_res1, c_res2 = st.columns([1, 3])
         with c_res1:
             st.metric("Fair Value Total", f"R$ {total_fv:,.2f}")
@@ -467,15 +434,8 @@ class IFRS2App:
                     "FV Unitário": "R$ {:.4f}", 
                     "FV Ponderado": "R$ {:.4f}"
                 }),
-                use_container_width=True,
-                hide_index=True
+                use_container_width=True, hide_index=True
             )
         
-        # Opção de Download
         csv = df_res.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            "📥 Baixar Relatório (CSV)", 
-            data=csv, 
-            file_name="icarus_valuation_result.csv", 
-            mime="text/csv"
-        )
+        st.download_button("📥 Baixar Relatório (CSV)", data=csv, file_name="icarus_valuation_result.csv", mime="text/csv")
