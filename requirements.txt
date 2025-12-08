@@ -7,3 +7,9 @@ PyPDF2
 python-docx
 google-generativeai
 numba
+yfinance
+arch
+webdriver-manager
+selenium
+beautifulsoup4
+scipy
