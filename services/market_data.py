@@ -11,70 +11,47 @@ import streamlit as st
 class MarketDataService:
     """
     Serviço de Dados de Mercado (Backend).
-    Versão Final: Integração validada com B3 (VENCTO) e Escala Decimal.
+    Versão com Correção de Escala Dinâmica (Heurística 5-20%).
     """
 
-    # =========================================================================
-    # MÓDULO 1: VOLATILIDADE (MANTIDO)
-    # =========================================================================
+    # --- MÓDULO DE VOLATILIDADE (MANTIDO) ---
     @staticmethod
     def get_peer_group_volatility(tickers: List[str], start_date: date, end_date: date) -> Dict[str, Any]:
         results = {}
         valid_std = []
         valid_ewma = []
-        
         s_str = start_date.strftime("%Y-%m-%d")
         e_str = end_date.strftime("%Y-%m-%d")
-
         for ticker_raw in tickers:
             ticker = ticker_raw.strip().upper()
-            if not ticker.endswith(".SA") and any(char.isdigit() for char in ticker):
-                ticker += ".SA"
+            if not ticker.endswith(".SA") and any(char.isdigit() for char in ticker): ticker += ".SA"
             try:
                 data = yf.download(ticker, start=s_str, end=e_str, progress=False)
                 if data.empty:
                     results[ticker_raw] = {"error": "Sem dados"}
                     continue
-                
                 series = None
                 if 'Adj Close' in data.columns: series = data['Adj Close']
                 elif 'Close' in data.columns: series = data['Close']
-                
                 if series is None: continue
                 if isinstance(series, pd.DataFrame): series = series.iloc[:, 0]
-                
                 returns = np.log(series / series.shift(1)).dropna()
                 if len(returns) < 30: continue
-
                 std_vol = returns.std() * np.sqrt(252)
                 ewma_vol = returns.ewm(alpha=(1 - 0.94)).std().iloc[-1] * np.sqrt(252)
-                
-                garch_vol = None
                 try:
                     r_scaled = returns * 100 
                     model = arch_model(r_scaled, vol='Garch', p=1, q=1, rescale=False)
                     res = model.fit(disp='off', show_warning=False)
                     garch_vol = np.sqrt(res.forecast(horizon=1).variance.iloc[-1, 0] * 252) / 100
-                except: pass
-
+                except: garch_vol = None
                 valid_std.append(std_vol)
                 valid_ewma.append(ewma_vol)
                 results[ticker_raw] = {"std_dev": std_vol, "ewma": ewma_vol, "garch": garch_vol, "last_price": float(series.iloc[-1])}
-
             except Exception as e: results[ticker_raw] = {"error": str(e)}
+        return {"summary": {"mean_std": np.mean(valid_std) if valid_std else 0.0, "mean_ewma": np.mean(valid_ewma) if valid_ewma else 0.0, "count_valid": len(valid_std)}, "details": results}
 
-        return {
-            "summary": {
-                "mean_std": np.mean(valid_std) if valid_std else 0.0,
-                "mean_ewma": np.mean(valid_ewma) if valid_ewma else 0.0,
-                "count_valid": len(valid_std)
-            },
-            "details": results
-        }
-
-    # =========================================================================
-    # MÓDULO 2: CURVA DE JUROS DI (VALIDADO)
-    # =========================================================================
+    # --- MÓDULO DI FUTURO (ATUALIZADO) ---
 
     @staticmethod
     def gerar_url_di(data_ref: date) -> str:
@@ -86,7 +63,6 @@ class MarketDataService:
 
     @staticmethod
     def converter_vencimento_ref(di_code):
-        """Conversor F26 -> 01/2026 validado"""
         meses = {"F": "01", "G": "02", "H": "03", "J": "04", "K": "05", "M": "06", 
                  "N": "07", "Q": "08", "U": "09", "V": "10", "X": "11", "Z": "12"}
         di_code = str(di_code).strip().upper()
@@ -106,84 +82,62 @@ class MarketDataService:
 
         try:
             response = session.get(url, timeout=15)
-            # Leitura robusta (decimal vírgula, milhar ponto)
             tabelas_dfs = pd.read_html(response.content, encoding='latin1', decimal=',', thousands='.')
 
             if len(tabelas_dfs) < 7: return pd.DataFrame()
 
-            # Seleção Tabela 6 (Padrão B3 atual)
+            # Tabela 6 direta
             df = tabelas_dfs[6]
-            if len(df) < 2: return pd.DataFrame()
-
-            # Ajuste de Header (Linha 1)
+            
+            # Ajuste de Header
             df.columns = df.iloc[1]
             df = df.iloc[2:].reset_index(drop=True)
             if df.iloc[-1, 0] is None or pd.isna(df.iloc[-1, 0]): df = df.iloc[:-1]
 
-            # Mapeamento Validado
+            # Mapeamento
             mapa_colunas = {
-                'VENCTO': 'VENCIMENTO',       # Nome retornado no teste
-                'VENC.': 'VENCIMENTO',        # Fallback
+                'VENCTO': 'VENCIMENTO', 
+                'VENC.': 'VENCIMENTO',
                 'ÚLT. PREÇO': 'ULTIMO PRECO',
                 'ULT. PREÇO': 'ULTIMO PRECO',
                 'AJUSTE': 'PRECO AJUSTE'
             }
-            
             cols_found = {}
             for c in df.columns:
                 c_clean = str(c).strip().upper()
-                if c_clean in mapa_colunas:
-                    cols_found[c] = mapa_colunas[c_clean]
-            
+                if c_clean in mapa_colunas: cols_found[c] = mapa_colunas[c_clean]
             df = df.rename(columns=cols_found)
 
             if 'VENCIMENTO' not in df.columns: return pd.DataFrame()
-
-            # Prioriza ULTIMO PRECO
             col_preco = 'ULTIMO PRECO' if 'ULTIMO PRECO' in df.columns else 'PRECO AJUSTE'
             if col_preco not in df.columns: return pd.DataFrame()
 
             clean_data = []
-            
             for _, row in df.iterrows():
                 try:
                     venc_cod = row['VENCIMENTO']
                     taxa_raw = row[col_preco]
-                    
                     if pd.isna(venc_cod) or pd.isna(taxa_raw): continue
-                    
                     venc_fmt = MarketDataService.converter_vencimento_ref(venc_cod)
                     if not venc_fmt: continue
-                    
                     dt_venc = datetime.strptime(venc_fmt, "%m/%Y").date()
                     
-                    if isinstance(taxa_raw, str):
-                        taxa_raw = taxa_raw.replace('.', '').replace(',', '.')
+                    if isinstance(taxa_raw, str): taxa_raw = taxa_raw.replace('.', '').replace(',', '.')
                     
-                    taxa_val = float(taxa_raw)
-                    
-                    # --- CORREÇÃO DE ESCALA FINA ---
-                    # Objetivo: Converter qualquer formato para decimal (ex: 0.1490 para 14.9%)
-                    # No teste: 1489.0 virou 1.4903 (149%). Precisamos dividir por mais 10.
-                    
-                    if taxa_val > 1000:
-                         taxa_val = taxa_val / 10000.0  # 1490.3 -> 0.14903
-                    elif taxa_val > 100:
-                         taxa_val = taxa_val / 1000.0   # 149.03 -> 0.14903
-                    elif taxa_val > 50:
-                         taxa_val = taxa_val / 100.0    # 52.0 -> 0.52
-                    elif taxa_val > 0.50:
-                         taxa_val = taxa_val / 100.0    # 14.90 -> 0.1490
+                    # === LÓGICA DE ESCALA DINÂMICA ===
+                    # Divide por 10 até que o valor seja < 0.40 (40%)
+                    val = float(taxa_raw)
+                    while val > 0.40:
+                        val /= 10.0
                     
                     dias_corridos = (dt_venc - reference_date).days
-                    
                     if dias_corridos > 0:
                         clean_data.append({
-                            "Vencimento_Fmt": venc_fmt,     # Visual (01/2026)
-                            "Vencimento_Str": str(venc_cod),# Código (F26)
+                            "Vencimento_Fmt": venc_fmt,
+                            "Vencimento_Str": str(venc_cod),
                             "Vencimento_Data": dt_venc,
                             "Dias_Corridos": dias_corridos,
-                            "Taxa": taxa_val
+                            "Taxa": val
                         })
                 except: continue
 
