@@ -53,7 +53,8 @@ class PlanAnalysisResult:
 
     Attributes:
         summary (str): Resumo executivo do plano.
-        contract_features (str): Detalhamento das cláusulas críticas (Vesting, Lock-up, etc.).
+        program_summary: str # Resumo "Jurídico/RH" (Participante, quantidade, regras gerais)
+        valuation_params: str # Resumo "Quantitativo" (Carência, Dividendos, Lockup, Liquidação)
         methodology_rationale (str): Justificativa técnica profunda para a escolha do modelo.
         model_recommended (PricingModelType): O modelo matemático sugerido pela análise.
         model_reason (str): Justificativa curta/sintética (para UI).
