@@ -11,7 +11,8 @@ import streamlit as st
 class MarketDataService:
     """
     Serviço de Dados de Mercado (Backend).
-    Versão Corrigida: Mapeamento de colunas atualizado para o layout 'VENCTO' da B3.
+    Versão Corrigida: Implementa prioridade de colunas para resolver conflitos da B3
+    (ex: 'VENCTO' e múltiplas colunas de preço).
     """
 
     # =========================================================================
@@ -20,7 +21,7 @@ class MarketDataService:
     
     @staticmethod
     def get_peer_group_volatility(tickers: List[str], start_date: date, end_date: date) -> Dict[str, Any]:
-        """Calcula volatilidade histórica (Mantido)."""
+        """Calcula volatilidade histórica."""
         results = {}
         valid_ewma_values = []
         valid_std_values = []
@@ -84,7 +85,7 @@ class MarketDataService:
         return {"summary": summary, "details": results}
 
     # =========================================================================
-    # MÓDULO 2: CURVA DE JUROS DI (B3 Scraping Otimizado - MAPA CORRIGIDO)
+    # MÓDULO 2: CURVA DE JUROS DI (B3 Scraping - CORRIGIDO)
     # =========================================================================
 
     @staticmethod
@@ -98,12 +99,14 @@ class MarketDataService:
         
         di_code = str(di_code).strip().upper()
         
+        # Padrão curto: F26
         match_code = re.match(r"([A-Z])(\d{2})", di_code)
         if match_code:
             mes_letra, ano_dois_digitos = match_code.groups()
             if mes_letra in meses:
                 return date(2000 + int(ano_dois_digitos), meses[mes_letra], 1)
 
+        # Padrão longo: JAN/26
         match_slash = re.match(r"([A-Z]+)/(\d{2,4})", di_code)
         if match_slash:
             mes_str, ano_str = match_slash.groups()
@@ -116,6 +119,10 @@ class MarketDataService:
 
     @staticmethod
     def gerar_url_di(data_ref: date) -> str:
+        # Garante o formato DD/MM/AAAA exigido pela B3
+        if isinstance(data_ref, str):
+            try: data_ref = datetime.strptime(data_ref, "%Y-%m-%d").date()
+            except: pass
         d_fmt = data_ref.strftime("%d/%m/%Y")
         return f"https://www2.bmf.com.br/pages/portal/bmfbovespa/boletim1/SistemaPregao_excel1.asp?Data={d_fmt}&Mercadoria=DI1&XLS=true"
 
@@ -124,7 +131,6 @@ class MarketDataService:
     def get_di_data_b3(reference_date: date) -> pd.DataFrame:
         """
         Busca a curva DI completa.
-        Correção: Mapeamento de 'VENCTO' e priorização de 'ÚLT. PREÇO'.
         """
         url = MarketDataService.gerar_url_di(reference_date)
         session = requests.Session()
@@ -132,29 +138,31 @@ class MarketDataService:
 
         try:
             response = session.get(url, timeout=15)
-            response.raise_for_status()
-            
+            # Tenta ler as tabelas HTML
             dfs = pd.read_html(response.content, encoding='latin1', decimal=',', thousands='.')
             if not dfs: return pd.DataFrame()
 
+            # --- ESTRATÉGIA DE SELEÇÃO DE TABELA ---
             df_alvo = None
-            if len(dfs) >= 7:
-                 # Verificação rápida
-                 if 'VENC' in str(dfs[6].values).upper():
-                     df_alvo = dfs[6]
             
+            # Tenta direto a tabela 6 (comum na B3) verificando conteúdo
+            if len(dfs) >= 7 and 'VENC' in str(dfs[6].values).upper():
+                 df_alvo = dfs[6]
+            
+            # Fallback: Busca em todas as tabelas
             if df_alvo is None:
                 for df in dfs:
                     s_df = str(df.values).upper()
-                    if 'VENC' in s_df and ('AJUSTE' in s_df or 'ÚLT. PREÇO' in s_df or 'PREÇO' in s_df):
+                    # Procura palavras-chave de DI Futuro
+                    if 'VENC' in s_df and ('AJUSTE' in s_df or 'ÚLT. PREÇO' in s_df):
                         df_alvo = df
                         break
             
-            if df_alvo is None or len(df_alvo) < 2: return pd.DataFrame()
+            if df_alvo is None: return pd.DataFrame()
 
             df = df_alvo.copy()
             
-            # Limpeza de cabeçalho
+            # --- LIMPEZA DE CABEÇALHO ---
             header_idx = -1
             for idx, row in df.iterrows():
                 row_str = row.astype(str).str.upper().values
@@ -166,34 +174,23 @@ class MarketDataService:
                 df.columns = df.iloc[header_idx]
                 df = df.iloc[header_idx+1:].reset_index(drop=True)
 
-            # --- CORREÇÃO CRÍTICA DO MAPEAMENTO ---
-            # 'VENCTO' é o nome real vindo da B3 no modo XLS.
-            # Removemos 'AJUSTE' -> 'Taxa' para evitar pegar o PU (99k).
-            mapa_colunas = {
-                'VENCTO': 'Vencimento_Str',
-                'VENC.': 'Vencimento_Str',
-                'ÚLT. PREÇO': 'Taxa',
-                'ULT. PREÇO': 'Taxa',
-                'PREÇO MÉD.': 'Taxa' # Fallback se não tiver último
-            }
+            # Normaliza nomes das colunas
+            df.columns = [str(c).strip().upper() for c in df.columns]
+
+            # --- SISTEMA DE PRIORIDADE DE COLUNAS (FIX PRINCIPAL) ---
+            # Identifica a coluna de Vencimento
+            col_venc = next((c for c in df.columns if c in ['VENCTO', 'VENC.', 'VENCIMENTO']), None)
             
-            cols_found = {}
-            for c in df.columns:
-                c_clean = str(c).strip().upper()
-                if c_clean in mapa_colunas:
-                    # Evita duplicar 'Taxa' se a tabela tiver PREÇO MED e ULT PREÇO
-                    if mapa_colunas[c_clean] == 'Taxa' and 'Taxa' in cols_found.values():
-                        # Prioriza ÚLT. PREÇO sobre MÉDIO
-                        if 'ÚLT' in c_clean or 'ULT' in c_clean:
-                            cols_found[c] = mapa_colunas[c_clean]
-                    else:
-                        cols_found[c] = mapa_colunas[c_clean]
+            # Identifica a coluna de Taxa (Prioriza ÚLT. PREÇO para evitar pegar PU ou Médio)
+            prioridades_taxa = ['ÚLT. PREÇO', 'ULT. PREÇO', 'PREÇO MÉD.', 'AJUSTE', 'PREÇO AJUSTE']
+            col_taxa = next((p for p in prioridades_taxa if p in df.columns), None)
             
-            df = df.rename(columns=cols_found)
-            
-            # Verifica colunas essenciais
-            if 'Vencimento_Str' not in df.columns or 'Taxa' not in df.columns:
+            if not col_venc or not col_taxa:
                 return pd.DataFrame()
+
+            # Renomeia e filtra explicitamente
+            df = df.rename(columns={col_venc: 'Vencimento_Str', col_taxa: 'Taxa'})
+            df = df[['Vencimento_Str', 'Taxa']]
 
             clean_data = []
             for _, row in df.iterrows():
@@ -203,19 +200,26 @@ class MarketDataService:
                     
                     if pd.isna(venc_str) or pd.isna(taxa_raw): continue
 
-                    # Tratamento se houver duplicidade de colunas (Series ao invés de scalar)
-                    if isinstance(taxa_raw, pd.Series):
-                        taxa_raw = taxa_raw.iloc[0]
+                    # Tratamento se vier Series
+                    if isinstance(taxa_raw, pd.Series): taxa_raw = taxa_raw.iloc[0]
 
+                    # Converte Data de Vencimento
                     dt_venc = MarketDataService._parse_b3_maturity_code(venc_str)
                     if not dt_venc: continue
                     
+                    # Converte Taxa
                     if isinstance(taxa_raw, str):
                         taxa_raw = taxa_raw.replace('.', '').replace(',', '.')
+                    
                     taxa_val = float(taxa_raw)
                     
-                    # Normalização
-                    if taxa_val > 0.50: taxa_val = taxa_val / 100.0
+                    # Normalização para decimal (ex: 13.15 -> 0.1315)
+                    # Se vier muito alto (ex: 131.52), divide por 1000 ou 100 conforme escala
+                    # Ajuste conservador para o Icarus (espera decimal < 1.0)
+                    if taxa_val > 50: 
+                        taxa_val = taxa_val / 100.0 # Tenta trazer para 1.31
+                    if taxa_val > 0.50:
+                        taxa_val = taxa_val / 100.0 # Traz para 0.0131
                     
                     dias_corridos = (dt_venc - reference_date).days
                     
