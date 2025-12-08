@@ -419,14 +419,31 @@ class IFRS2App:
         
         for idx, item in enumerate(inputs):
             try:
+                # --- CASTING EXPLÍCITO DE SEGURANÇA ---
+                # Isso garante que nenhum "None", String ou NumPy float32 quebre o Numba
+                S = float(item['S'])
+                K = float(item['K'])
+                r = float(item['r'])
+                vol = float(item['Vol'])
+                q = float(item['q'])
+                T = float(item['T'])
+                
+                # Binomial Específico
+                vesting = float(item.get('Vesting', 0.0))
+                turnover = float(item.get('Turnover', 0.0))
+                mul_m = float(item.get('M', 2.0))
+                strike_corr = float(item.get('StrikeCorr', 0.0))
+                lockup = float(item.get('Lockup', 0.0))
+                
+                # --- CHAMADA AOS MOTORES ---
                 if model_type == PricingModelType.BINOMIAL:
                     fv = FinancialMath.binomial_custom_optimized(
-                        item['S'], item['K'], item['r'], item['Vol'], item['q'],
-                        item['Vesting'], item['Turnover'], item['M'], 0.0,
-                        item['T'], item['StrikeCorr'], item['Lockup']
+                        S, K, r, vol, q,
+                        vesting, turnover, mul_m, 0.0,
+                        T, strike_corr, lockup
                     )
                 elif model_type == PricingModelType.BLACK_SCHOLES_GRADED:
-                    fv = FinancialMath.bs_call(item['S'], item['K'], item['T'], item['r'], item['Vol'], item['q'])
+                    fv = FinancialMath.bs_call(S, K, T, r, vol, q)
                 elif model_type == PricingModelType.RSU:
                     base = item['S'] * np.exp(-item['q']*item['T'])
                     disc = FinancialMath.calculate_lockup_discount(item['Vol'], item['Lockup'], base, item['q']) if item['Lockup'] > 0 else 0
