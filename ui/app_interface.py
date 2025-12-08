@@ -16,6 +16,8 @@ from core.domain import PlanAnalysisResult, Tranche, PricingModelType, Settlemen
 from engines.financial import FinancialMath
 from services.ai_service import DocumentService
 from services.strategy import ModelSelectorService
+# Importação do novo serviço de dados de mercado
+from services.market_data import MarketDataService
 
 class IFRS2App:
     """
@@ -35,6 +37,12 @@ class IFRS2App:
             st.session_state['tranches'] = []
         if 'mc_code' not in st.session_state:
             st.session_state['mc_code'] = ""
+            
+        # Estados para inputs de mercado (permite atualização via botões)
+        if 'calc_vol' not in st.session_state:
+            st.session_state['calc_vol'] = 30.0
+        if 'calc_r' not in st.session_state:
+            st.session_state['calc_r'] = 10.75
 
         # --- SIDEBAR: Inputs ---
         with st.sidebar:
@@ -64,7 +72,7 @@ class IFRS2App:
                 self._handle_analysis(uploaded_files, manual_text, gemini_key)
             
             st.divider()
-            st.caption("v.Beta 2.1 - UX & Strike Correction")
+            st.caption("v.Beta 2.2 - Market Data Integration")
 
         # --- ÁREA PRINCIPAL ---
         if st.session_state['analysis_result']:
@@ -166,7 +174,7 @@ class IFRS2App:
         
         st.divider()
 
-        # --- Seção 3: Inputs de Mercado (Data Base) ---
+        # --- Seção 3: Parâmetros de Mercado (Data Base) ---
         st.subheader("3. Parâmetros de Mercado (Data Base)")
         
         # Toggle para Contexto (Outorga vs Remensuração)
@@ -174,16 +182,112 @@ class IFRS2App:
         if calc_mode == "Remensuração (Reporting Date)" and settlement == SettlementType.EQUITY_SETTLED:
             st.warning("⚠️ Atenção: Instrumentos Equity-Settled geralmente não são remensurados, exceto em modificações contratuais.")
 
+        # Layout de 4 colunas
         col1, col2, col3, col4 = st.columns(4)
+        
+        # 1. Spot Price
         S = col1.number_input("Preço da Ação (Spot) R$", 0.0, 10000.0, 50.0, help="Preço de fechamento da ação na data base da avaliação.")
+        
+        # 2. Strike Price
         K = col2.number_input("Preço de Exercício (Strike) R$", 0.0, 10000.0, analysis.strike_price, help="Preço de exercício atualizado (se aplicável).")
-        vol = col3.number_input("Volatilidade Anual (%)", 0.0, 500.0, 30.0, help="Volatilidade implícita ou histórica esperada para o prazo remanescente.") / 100
-        r = col4.number_input("Taxa Livre de Risco (%)", 0.0, 100.0, 10.75, help="Taxa spot (Vertices da curva DI/Pré) equivalente ao prazo da opção.") / 100
+        
+        # 3. Volatilidade (COM ASSISTENTE)
+        with col3:
+            vol_input = st.number_input(
+                "Volatilidade Anual (%)", 
+                0.0, 500.0, 
+                st.session_state['calc_vol'], # Conectado ao session_state
+                step=0.1, format="%.2f",
+                help="Volatilidade histórica ou implícita do ativo. Use a lupa para buscar automaticamente."
+            )
+            
+            # Popover para buscar volatilidade
+            with st.popover("🔍 Calcular Volatilidade"):
+                st.markdown("##### Calculadora de Volatilidade")
+                st.caption("Conecta ao Yahoo Finance para extrair preços históricos.")
+                
+                ticker_vol = st.text_input("Ticker (ex: VALE3, PETR4)", "VALE3", key="vol_ticker")
+                window_vol = st.slider("Janela Histórica (Anos)", 1, 5, 3, key="vol_window", help="Período de observação para o cálculo da volatilidade.")
+                
+                if st.button("Calcular Volatilidade", key="btn_run_vol"):
+                    with st.spinner(f"Buscando dados históricos de {ticker_vol}..."):
+                        res_vol = MarketDataService.get_historical_volatility(ticker_vol, window_vol)
+                        
+                    if "error" in res_vol:
+                        st.error(res_vol["error"])
+                        st.caption("Dica: Verifique se o ticker está correto (ex: adicionar .SA para Brasil) e se há pregões no período.")
+                    else:
+                        st.success("Cálculo realizado!")
+                        st.caption(f"Base: {res_vol['samples']} pregões até {res_vol['last_date']}")
+                        
+                        st.markdown("**Selecione o modelo:**")
+                        c_v1, c_v2, c_v3 = st.columns(3)
+                        
+                        # Função auxiliar para atualizar o input principal
+                        def set_vol(val):
+                            st.session_state['calc_vol'] = val * 100
+                            st.rerun()
+
+                        with c_v1:
+                            st.metric("Desvio Padrão", f"{res_vol['std_dev']:.2%}")
+                            if st.button("Usar Std", key="btn_std"): set_vol(res_vol['std_dev'])
+                        with c_v2:
+                            st.metric("EWMA (λ=0.94)", f"{res_vol['ewma']:.2%}")
+                            if st.button("Usar EWMA", key="btn_ewma"): set_vol(res_vol['ewma'])
+                        with c_v3:
+                            if res_vol['garch']:
+                                st.metric("GARCH(1,1)", f"{res_vol['garch']:.2%}")
+                                if st.button("Usar GARCH", key="btn_garch"): set_vol(res_vol['garch'])
+                            else:
+                                st.caption("GARCH n/a (Dados insuficientes/Convergência)")
+
+        # 4. Taxa Livre de Risco (COM ASSISTENTE)
+        with col4:
+            r_input = st.number_input(
+                "Taxa Livre de Risco (%)", 
+                0.0, 100.0, 
+                st.session_state['calc_r'], # Conectado ao session_state
+                step=0.01, format="%.2f",
+                help="Taxa spot da curva pré (DI) equivalente ao prazo da opção."
+            )
+            
+            # Popover para buscar DI
+            with st.popover("📈 Buscar Taxa DI (B3)"):
+                st.markdown("##### Curva de Juros (DI x Pré)")
+                st.caption("Captura a curva oficial da B3 e interpola para o prazo do contrato.")
+                
+                # Usa o prazo identificado pela IA como sugestão
+                target_maturity = analysis.option_life_years
+                st.info(f"Prazo Alvo (do Contrato): **{target_maturity} anos**")
+                
+                if st.button("Consultar B3 & Interpolar", key="btn_calc_di"):
+                    with st.spinner("Conectando ao site da B3 (Selenium)..."):
+                        # O serviço usa cache para evitar múltiplas chamadas lentas
+                        df_di = MarketDataService.get_risk_free_rate_curve()
+                    
+                    if not df_di.empty:
+                        taxa_interpolada = MarketDataService.interpolate_di_rate(target_maturity, df_di)
+                        st.success(f"Taxa Encontrada: **{taxa_interpolada*100:.2f}%**")
+                        
+                        # Mostra um gráfico simples da curva para validação visual
+                        st.line_chart(df_di.set_index('anos')['taxa'])
+                        
+                        if st.button("Aplicar Taxa ao Modelo", key="btn_apply_di"):
+                            st.session_state['calc_r'] = taxa_interpolada * 100
+                            st.rerun()
+                    else:
+                        st.error("Falha ao obter dados da B3. O site pode estar indisponível ou bloqueando a conexão. Insira a taxa manualmente.")
+
+        # Dividend Yield
         q = st.number_input("Dividend Yield Esperado (% a.a.)", 0.0, 100.0, 4.0, help="Taxa anual de dividendos esperada. Se o participante recebe dividendos na carência, use 0%.") / 100
+
+        # Normalização dos valores para o cálculo
+        vol = vol_input / 100
+        r = r_input / 100
 
         st.subheader("4. Cálculo do Fair Value")
 
-        # Roteamento
+        # Roteamento de Modelos
         if active_model == PricingModelType.BLACK_SCHOLES_GRADED:
             self._render_graded(S, K, r, vol, q, analysis, calc_mode)
         elif active_model == PricingModelType.BINOMIAL:
