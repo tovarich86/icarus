@@ -419,27 +419,33 @@ class IFRS2App:
         
         for idx, item in enumerate(inputs):
             try:
-                # --- CORREÇÃO DE ESCALA E TIPAGEM ---
-                # A UI entrega a volatilidade em formato percentual (ex: 30.0 para 30%)
-                # Dividimos por 100 aqui para o motor receber decimal (0.30)
-                vol_decimal = float(item['Vol']) / 100.0
+                # --- EXTRAÇÃO DEFENSIVA DE DADOS (Correção do Erro 'K') ---
+                # Usamos .get() com valor default 0.0 para chaves que podem não existir no RSU (como 'K' e 'r')
                 
-                # Garantimos que todos os outros inputs sejam floats seguros
-                S = float(item['S'])
-                K = float(item['K'])
-                r = float(item['r'])     # Taxa já vem em decimal do widget
-                q = float(item['q'])
-                T = float(item['T'])
+                # Volatilidade: Se não tiver (alguns casos de RSU sem lockup), assume 0
+                raw_vol = item.get('Vol', 0.0)
+                vol_decimal = float(raw_vol) / 100.0
                 
-                # Inputs específicos (com defaults seguros)
+                S = float(item['S']) # Spot é obrigatório
+                q = float(item['q']) # Dividendos é obrigatório
+                T = float(item['T']) # Tempo é obrigatório
+                
+                # --- ONDE O RSU FALHAVA ---
+                # O RSU não envia 'K' (Strike) nem 'r' (Taxa Livre de Risco) no dicionário.
+                # Usamos .get() para evitar o KeyError.
+                K = float(item.get('K', 0.0))
+                r = float(item.get('r', 0.0))
+                
+                # Inputs específicos opcionais
                 vesting = float(item.get('Vesting', 0.0))
-                turnover = float(item.get('Turnover', 0.0)) # Já vem decimal
+                turnover = float(item.get('Turnover', 0.0))
                 mul_m = float(item.get('M', 2.0))
-                # Correção no StrikeCorr e Lockup se necessário
                 strike_corr = float(item.get('StrikeCorr', 0.0)) 
                 lockup = float(item.get('Lockup', 0.0))
 
-                # --- CHAMADA AOS MOTORES (Com Volatilidade Corrigida) ---
+                # --- CHAMADA AOS MOTORES ---
+                fv = 0.0 # Inicializa
+                
                 if model_type == PricingModelType.BINOMIAL:
                     fv = FinancialMath.binomial_custom_optimized(
                         S, K, r, vol_decimal, q,
@@ -448,23 +454,33 @@ class IFRS2App:
                     )
                 elif model_type == PricingModelType.BLACK_SCHOLES_GRADED:
                     fv = FinancialMath.bs_call(S, K, T, r, vol_decimal, q)
+                    
                 elif model_type == PricingModelType.RSU:
-                    base = S * np.exp(-q*T)
+                    # RSU: Valor Base = Ação descontada de dividendos (se não receber durante carência)
+                    # Não usa 'r' (risco) pois é equity puro, não derivativo alavancado.
+                    base = S * np.exp(-q * T)
                     disc = 0.0
+                    
+                    # Se houver lockup, aplica desconto Chaffe
                     if lockup > 0:
                         disc = FinancialMath.calculate_lockup_discount(vol_decimal, lockup, base, q)
+                    
                     fv = base - disc
                 
                 w_fv = fv * float(item['Prop'])
                 total_fv += w_fv
                 
+                # Formatação segura para log
+                vol_log = f"{vol_decimal*100:.2f}%"
+                
                 res_data.append({
                     "Tranche": item['TrancheID'],
                     "FV Unit": fv,
                     "FV Ponderado": w_fv,
-                    "Input Vol": f"{vol_decimal*100:.2f}%" # Log para conferência
+                    "Vol Input": vol_log
                 })
             except Exception as e:
+                # Isso vai mostrar na tela qual foi o erro exato, se ainda houver
                 st.error(f"Erro Tranche {idx+1}: {e}")
                 
             prog.progress((idx+1)/len(inputs))
