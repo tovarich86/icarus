@@ -11,7 +11,7 @@ import streamlit as st
 class MarketDataService:
     """
     Serviço de Dados de Mercado (Backend).
-    Versão Otimizada: Integra lógica robusta de scraping da B3 (Sistema Pregão).
+    Versão Corrigida: Mapeamento de colunas atualizado para o layout 'VENCTO' da B3.
     """
 
     # =========================================================================
@@ -20,7 +20,7 @@ class MarketDataService:
     
     @staticmethod
     def get_peer_group_volatility(tickers: List[str], start_date: date, end_date: date) -> Dict[str, Any]:
-        """Calcula volatilidade histórica (Mantido da versão anterior)."""
+        """Calcula volatilidade histórica (Mantido)."""
         results = {}
         valid_ewma_values = []
         valid_std_values = []
@@ -84,7 +84,7 @@ class MarketDataService:
         return {"summary": summary, "details": results}
 
     # =========================================================================
-    # MÓDULO 2: CURVA DE JUROS DI (B3 Scraping Otimizado - CORRIGIDO)
+    # MÓDULO 2: CURVA DE JUROS DI (B3 Scraping Otimizado - MAPA CORRIGIDO)
     # =========================================================================
 
     @staticmethod
@@ -98,14 +98,12 @@ class MarketDataService:
         
         di_code = str(di_code).strip().upper()
         
-        # Caso 1: Código curto "F26" (Padrão antigo ou ticker)
         match_code = re.match(r"([A-Z])(\d{2})", di_code)
         if match_code:
             mes_letra, ano_dois_digitos = match_code.groups()
             if mes_letra in meses:
                 return date(2000 + int(ano_dois_digitos), meses[mes_letra], 1)
 
-        # Caso 2: Formato JAN/26 ou JAN/2026 (Padrão planilha B3)
         match_slash = re.match(r"([A-Z]+)/(\d{2,4})", di_code)
         if match_slash:
             mes_str, ano_str = match_slash.groups()
@@ -114,12 +112,10 @@ class MarketDataService:
                 ano = int(ano_str)
                 if ano < 100: ano += 2000
                 return date(ano, mes, 1)
-
         return None
 
     @staticmethod
     def gerar_url_di(data_ref: date) -> str:
-        # CORREÇÃO CRÍTICA: Força o formato DD/MM/AAAA para a URL da B3
         d_fmt = data_ref.strftime("%d/%m/%Y")
         return f"https://www2.bmf.com.br/pages/portal/bmfbovespa/boletim1/SistemaPregao_excel1.asp?Data={d_fmt}&Mercadoria=DI1&XLS=true"
 
@@ -127,7 +123,8 @@ class MarketDataService:
     @st.cache_data(ttl=3600, show_spinner=False)
     def get_di_data_b3(reference_date: date) -> pd.DataFrame:
         """
-        Busca a curva DI completa usando a lógica robusta do script funcional.
+        Busca a curva DI completa.
+        Correção: Mapeamento de 'VENCTO' e priorização de 'ÚLT. PREÇO'.
         """
         url = MarketDataService.gerar_url_di(reference_date)
         session = requests.Session()
@@ -137,14 +134,10 @@ class MarketDataService:
             response = session.get(url, timeout=15)
             response.raise_for_status()
             
-            # Leitura robusta
             dfs = pd.read_html(response.content, encoding='latin1', decimal=',', thousands='.')
             if not dfs: return pd.DataFrame()
 
-            # Lógica de Busca da Tabela (Igual ao script funcional)
             df_alvo = None
-            
-            # Tenta direto a tabela 6 (comum) ou busca por conteúdo
             if len(dfs) >= 7:
                  # Verificação rápida
                  if 'VENC' in str(dfs[6].values).upper():
@@ -153,8 +146,7 @@ class MarketDataService:
             if df_alvo is None:
                 for df in dfs:
                     s_df = str(df.values).upper()
-                    # Procura colunas chave
-                    if 'VENC' in s_df and ('AJUSTE' in s_df or 'ÚLT. PREÇO' in s_df):
+                    if 'VENC' in s_df and ('AJUSTE' in s_df or 'ÚLT. PREÇO' in s_df or 'PREÇO' in s_df):
                         df_alvo = df
                         break
             
@@ -162,11 +154,11 @@ class MarketDataService:
 
             df = df_alvo.copy()
             
-            # Limpeza de cabeçalho: Procura a linha que contém "VENC" e "AJUSTE"
+            # Limpeza de cabeçalho
             header_idx = -1
             for idx, row in df.iterrows():
                 row_str = row.astype(str).str.upper().values
-                if any("VENC" in x for x in row_str) and any("AJUSTE" in x or "PREÇO" in x for x in row_str):
+                if any("VENC" in x for x in row_str):
                     header_idx = idx
                     break
             
@@ -174,23 +166,32 @@ class MarketDataService:
                 df.columns = df.iloc[header_idx]
                 df = df.iloc[header_idx+1:].reset_index(drop=True)
 
-            # Mapa de colunas do script funcional
+            # --- CORREÇÃO CRÍTICA DO MAPEAMENTO ---
+            # 'VENCTO' é o nome real vindo da B3 no modo XLS.
+            # Removemos 'AJUSTE' -> 'Taxa' para evitar pegar o PU (99k).
             mapa_colunas = {
-                'VENC.': 'Vencimento_Str', 
-                'AJUSTE': 'Taxa',
-                'PREÇO AJUSTE': 'Taxa',
-                'ÚLT. PREÇO': 'Taxa', 
-                'ULT. PREÇO': 'Taxa'
+                'VENCTO': 'Vencimento_Str',
+                'VENC.': 'Vencimento_Str',
+                'ÚLT. PREÇO': 'Taxa',
+                'ULT. PREÇO': 'Taxa',
+                'PREÇO MÉD.': 'Taxa' # Fallback se não tiver último
             }
             
             cols_found = {}
             for c in df.columns:
                 c_clean = str(c).strip().upper()
                 if c_clean in mapa_colunas:
-                    cols_found[c] = mapa_colunas[c_clean]
+                    # Evita duplicar 'Taxa' se a tabela tiver PREÇO MED e ULT PREÇO
+                    if mapa_colunas[c_clean] == 'Taxa' and 'Taxa' in cols_found.values():
+                        # Prioriza ÚLT. PREÇO sobre MÉDIO
+                        if 'ÚLT' in c_clean or 'ULT' in c_clean:
+                            cols_found[c] = mapa_colunas[c_clean]
+                    else:
+                        cols_found[c] = mapa_colunas[c_clean]
             
             df = df.rename(columns=cols_found)
             
+            # Verifica colunas essenciais
             if 'Vencimento_Str' not in df.columns or 'Taxa' not in df.columns:
                 return pd.DataFrame()
 
@@ -202,16 +203,18 @@ class MarketDataService:
                     
                     if pd.isna(venc_str) or pd.isna(taxa_raw): continue
 
-                    # Converte Vencimento
+                    # Tratamento se houver duplicidade de colunas (Series ao invés de scalar)
+                    if isinstance(taxa_raw, pd.Series):
+                        taxa_raw = taxa_raw.iloc[0]
+
                     dt_venc = MarketDataService._parse_b3_maturity_code(venc_str)
                     if not dt_venc: continue
                     
-                    # Converte Taxa
                     if isinstance(taxa_raw, str):
                         taxa_raw = taxa_raw.replace('.', '').replace(',', '.')
                     taxa_val = float(taxa_raw)
                     
-                    # Normalização para decimal (ex: 12.50 -> 0.1250)
+                    # Normalização
                     if taxa_val > 0.50: taxa_val = taxa_val / 100.0
                     
                     dias_corridos = (dt_venc - reference_date).days
@@ -223,8 +226,7 @@ class MarketDataService:
                             "Dias_Corridos": dias_corridos,
                             "Taxa": taxa_val
                         })
-                except:
-                    continue
+                except: continue
             
             if not clean_data: return pd.DataFrame()
             
