@@ -2,14 +2,11 @@
 Serviço de Estratégia e Seleção de Modelos.
 
 Este módulo contém a lógica de negócios ("Regras do Jogo") para determinar
-qual motor matemático é o mais adequado para um dado conjunto de características
-de um plano de opções.
-
-ATUALIZAÇÃO: Implementa lógica de correção para evitar sugestões de Monte Carlo
-em casos onde modelos determinísticos (RSU) são suficientes.
+qual motor matemático é o mais adequado, considerando agora as nuances de
+Contabilidade (Equity vs Liability) e a estrutura temporal (Vesting vs Life).
 """
 
-from core.domain import PlanAnalysisResult, PricingModelType
+from core.domain import PlanAnalysisResult, PricingModelType, SettlementType
 
 class ModelSelectorService:
     """
@@ -19,76 +16,81 @@ class ModelSelectorService:
     @staticmethod
     def select_model(analysis: PlanAnalysisResult) -> PlanAnalysisResult:
         """
-        Analisa as características extraídas (flags) e determina o modelo matemático recomendado.
+        Analisa as características extraídas e determina o modelo matemático recomendado.
 
-        Lógica de Decisão:
-        1. Gatilhos de Mercado (TSR) -> Monte Carlo (Obrigatório).
-        2. Strike Zero/Matching Shares -> RSU (Obrigatório).
-           - CORREÇÃO: Se a IA sugerir Monte Carlo por causa de vesting/turnover, forçamos RSU.
-        3. Características Americanas (Lock-up, Correção de Strike, Gap Longo) -> Binomial.
-        4. Caso Padrão -> Black-Scholes Graded.
-
-        Args:
-            analysis (PlanAnalysisResult): O objeto contendo os dados extraídos da análise preliminar.
-
-        Returns:
-            PlanAnalysisResult: O mesmo objeto, enriquecido com a recomendação do modelo e racional ajustado.
+        Novas Regras de Decisão:
+        1. Classificação Contábil: Alerta sobre remensuração se for Cash-Settled.
+        2. Gap de Exercício: Usa dados precisos das tranches para sugerir Binomial.
         """
         
         # ---------------------------------------------------------------------
-        # 1. Condições de Mercado (Path Dependent) exigem Simulação
+        # 0. Enriquecimento de Racional (Contabilidade)
+        # ---------------------------------------------------------------------
+        # Se for passivo (Cash-Settled), garantimos que o racional mencione isso.
+        if analysis.is_liability():
+            warning_text = f" [ATENÇÃO: Plano {analysis.settlement_type.value}. Requer remensuração do Fair Value a cada data de balanço]."
+            if warning_text not in analysis.methodology_rationale:
+                analysis.methodology_rationale += warning_text
+
+        # ---------------------------------------------------------------------
+        # 1. Condições de Mercado (Path Dependent) -> Monte Carlo
         # ---------------------------------------------------------------------
         if analysis.has_market_condition:
             analysis.model_recommended = PricingModelType.MONTE_CARLO
-            
-            # Se a IA não forneceu justificativa, inserimos uma padrão
             if not analysis.methodology_rationale:
                 analysis.methodology_rationale = (
-                    "A presença de condições de mercado (ex: TSR, barreiras de preço) introduz dependência "
-                    "da trajetória do preço, inviabilizando soluções fechadas. O Monte Carlo é estritamente "
-                    "necessário para simular múltiplos cenários estocásticos para satisfazer essa condição."
+                    "A presença de condições de mercado (ex: TSR) exige Simulação de Monte Carlo "
+                    "para capturar a dependência da trajetória do preço."
                 )
             return analysis
 
         # ---------------------------------------------------------------------
-        # 2. Strike Zero ou Irrisório (Matching Shares / Restricted Stock)
+        # 2. Strike Zero ou Irrisório -> RSU / Phantom Shares
         # ---------------------------------------------------------------------
         if analysis.strike_is_zero:
             analysis.model_recommended = PricingModelType.RSU
             
-            # CORREÇÃO DE RACIONAL:
-            # Frequentemente, LLMs sugerem Monte Carlo para RSUs com vesting acelerado ou turnover.
-            # Aqui detectamos isso e corrigimos o texto para explicar a escolha pelo modelo RSU (Parcimônia).
+            # Refinamento do Racional baseado na Liquidação
+            term_used = "Phantom Shares" if analysis.settlement_type == SettlementType.CASH_SETTLED else "Ações Restritas (RSU)"
             
             rationale_upper = analysis.methodology_rationale.upper() if analysis.methodology_rationale else ""
             
+            # Evita sugerir Monte Carlo para RSU simples (erro comum de LLMs)
             if "MONTE CARLO" in rationale_upper and not analysis.has_market_condition:
                 analysis.methodology_rationale = (
-                    "Recomendação ajustada para RSU (Ações Restritas). Embora o contrato preveja cláusulas de "
-                    "aceleração, turnover ou vesting escalonado, a ausência de condições de mercado (ex: TSR) "
-                    "torna o uso de Monte Carlo desnecessariamente complexo. A metodologia padrão (IFRS 2) "
-                    "para Strike Zero é o valor da ação à vista, descontado de dividendos não recebidos no "
-                    "período de carência (Vestings tratados individualmente)."
+                    f"Recomendação ajustada para {term_used}. Apesar das regras de vesting, "
+                    "a ausência de gatilhos de mercado torna o Monte Carlo desnecessário. "
+                    "O valuation deve seguir o modelo de Valor Intrínseco Descontado (RSU)."
                 )
             elif not analysis.methodology_rationale:
                 analysis.methodology_rationale = (
-                    "O plano concede ações gratuitas ou com strike simbólico. A opcionalidade é irrelevante. "
-                    "O modelo indicado é tratar como RSU (Valor à vista descontado de dividendos), "
-                    "aplicando desconto de iliquidez (Chaffe) se houver Lock-up."
+                    f"O plano concede {term_used} (Strike Zero). O modelo indicado é o de RSU "
+                    "(Valor à vista descontado de dividendos), aplicando desconto de iliquidez (Chaffe) se houver Lock-up."
                 )
             
             return analysis
 
         # ---------------------------------------------------------------------
-        # 3. Características Exóticas / Americanas (Binomial)
+        # 3. Características Americanas / Barreiras -> Binomial
         # ---------------------------------------------------------------------
-        # Calcula gap entre vida da opção e vesting médio para identificar "Americanidade"
-        gap_exercicio = analysis.option_life_years - analysis.get_avg_vesting()
+        # Cálculo mais preciso do "Gap de Exercício" (Janela de Oportunidade)
+        # Se a opção vence muito tempo depois de vestir, o valor do exercício antecipado (Americano) é relevante.
         
+        avg_vesting = analysis.get_avg_vesting()
+        
+        # Tenta calcular a média de vencimento das tranches, se disponível
+        if analysis.tranches and analysis.tranches[0].expiration_date:
+            avg_life = sum(t.expiration_date * t.proportion for t in analysis.tranches)
+        else:
+            avg_life = analysis.option_life_years
+
+        gap_exercicio = avg_life - avg_vesting
+        
+        # Critérios para Binomial
         complex_features = (
-            analysis.has_strike_correction or 
-            gap_exercicio > 2.0 or 
-            analysis.lockup_years > 0
+            analysis.has_strike_correction or       # Strike indexado (IGPM, etc)
+            gap_exercicio > 2.0 or                  # Janela de exercício longa (Valor de tempo relevante)
+            analysis.lockup_years > 0               # Restrição de venda pós-exercício
         )
 
         if complex_features:
@@ -96,10 +98,9 @@ class ModelSelectorService:
             
             if not analysis.methodology_rationale:
                 analysis.methodology_rationale = (
-                    "O plano possui características de exercício 'Americano' e barreiras complexas "
-                    "(Lock-up ou Correção de Strike). O modelo Binomial (Lattice) discretiza o tempo, "
-                    "permitindo capturar a otimalidade do exercício e o desconto de iliquidez nó a nó, "
-                    "superando as limitações do Black-Scholes para estes casos."
+                    f"O plano possui características 'Americanas' (Janela de exercício de ~{gap_exercicio:.1f} anos) "
+                    "ou barreiras complexas (Lock-up/Correção). O modelo Binomial (Lattice) é superior ao "
+                    "Black-Scholes pois captura a decisão ótima de exercício antecipado e descontos de iliquidez."
                 )
             return analysis
 
@@ -110,9 +111,9 @@ class ModelSelectorService:
         
         if not analysis.methodology_rationale:
             analysis.methodology_rationale = (
-                "O plano não apresenta gatilhos de mercado ou barreiras complexas. "
-                "O Black-Scholes-Merton (Graded) é o padrão de mercado eficiente, "
-                "calculando cada tranche de vesting individualmente como uma opção europeia."
+                "O plano segue estrutura padrão (Opção Europeia/Plain Vanilla) sem gatilhos complexos. "
+                "O Black-Scholes-Merton (Graded) é o padrão de mercado mais eficiente, "
+                "calculando cada tranche individualmente."
             )
         
         return analysis
