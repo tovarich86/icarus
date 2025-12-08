@@ -4,6 +4,11 @@ Módulo de Interface do Usuário (UI).
 Responsável por renderizar os componentes visuais do Streamlit (botões, gráficos, inputs)
 e orquestrar o fluxo de interação do usuário. Este módulo atua como a camada 'View' e 'Controller',
 delegando a lógica pesada para 'services' e 'engines'.
+
+ATUALIZAÇÃO:
+- Layout do dashboard renovado para separar 'Resumo do Programa' (Jurídico/RH) de 
+  'Parâmetros de Valuation' (Quantitativo).
+- Melhor tratamento visual para a recomendação de modelos.
 """
 
 import streamlit as st
@@ -116,16 +121,40 @@ class IFRS2App:
     def _render_dashboard(self, analysis: PlanAnalysisResult, full_text: str, api_key: str) -> None:
         """Renderiza os resultados da análise e as calculadoras."""
         
-        # Seção 1: Diagnóstico
-        st.subheader("1. Diagnóstico e Seleção de Modelo")
+        # --- Seção 1: Diagnóstico e Estrutura ---
+        st.subheader("1. Diagnóstico e Estrutura")
+        
+        # Layout em Colunas para separar Resumo (Jurídico) x Parâmetros (Quant)
         c1, c2 = st.columns(2)
+        
         with c1:
-            st.markdown("**Características:**")
-            st.info(analysis.contract_features or analysis.summary)
+            st.markdown("##### 📄 Resumo do Programa")
+            # Usa getattr para compatibilidade caso o objeto analysis antigo (sem program_summary) seja usado
+            summary_text = getattr(analysis, 'program_summary', getattr(analysis, 'contract_features', analysis.summary))
+            st.info(summary_text)
+
         with c2:
-            st.markdown("**Recomendação:**")
-            st.success(f"**{analysis.model_recommended.value}**")
-            st.caption(analysis.methodology_rationale)
+            st.markdown("##### 🧮 Parâmetros de Valuation")
+            val_params = getattr(analysis, 'valuation_params', "Parâmetros misturados no resumo (atualize o domain).")
+            st.warning(val_params)
+
+        st.divider()
+
+        # --- Seção 2: Seleção de Metodologia ---
+        st.subheader("2. Seleção de Metodologia")
+        
+        # Destaque para o modelo recomendado
+        st.markdown(f"**Modelo Recomendado:** `{analysis.model_recommended.value}`")
+        st.caption(analysis.methodology_rationale)
+
+        # Expander com detalhes comparativos
+        with st.expander("Ver Análise Comparativa (Prós/Contras)"):
+            st.write(analysis.model_comparison)
+            cp, cc = st.columns(2)
+            cp.write("**Prós:**")
+            for p in analysis.pros: cp.write(f"- {p}")
+            cc.write("**Contras:**")
+            for c in analysis.cons: cc.write(f"- {c}")
 
         st.divider()
 
@@ -137,8 +166,8 @@ class IFRS2App:
         
         st.divider()
 
-        # Inputs Globais
-        st.subheader("2. Parâmetros de Mercado (Base)")
+        # --- Seção 3: Inputs de Mercado ---
+        st.subheader("3. Parâmetros de Mercado (Base)")
         col1, col2, col3, col4 = st.columns(4)
         S = col1.number_input("Preço Spot (R$)", 0.0, 10000.0, 50.0)
         K = col2.number_input("Strike (R$)", 0.0, 10000.0, analysis.strike_price)
@@ -146,7 +175,7 @@ class IFRS2App:
         r = col4.number_input("Taxa Livre Risco (%)", 0.0, 100.0, 10.75) / 100
         q = st.number_input("Dividend Yield (% a.a.)", 0.0, 100.0, 4.0) / 100
 
-        st.subheader("3. Cálculo do Fair Value")
+        st.subheader("4. Cálculo do Fair Value")
 
         # Roteamento para renderizadores específicos
         if active_model == PricingModelType.BLACK_SCHOLES_GRADED:
@@ -179,7 +208,7 @@ class IFRS2App:
         inputs = []
         for i, t in enumerate(tranches):
             with st.expander(f"Tranche {i+1} ({t.vesting_date} anos)", expanded=True):
-                c1, c2, c3 = st.columns(3)
+                c1, c2 = st.columns(2)
                 t_vest = c1.number_input(f"Vesting {i}", value=float(t.vesting_date), key=f"bs_t_{i}")
                 t_prop = c2.number_input(f"Peso % {i}", value=float(t.proportion*100), key=f"bs_p_{i}")/100
                 inputs.append({"T": t_vest, "prop": t_prop})
@@ -239,16 +268,59 @@ class IFRS2App:
             st.dataframe(pd.DataFrame(res))
 
     def _render_rsu(self, S, r, q, analysis):
+        st.info("ℹ️ Valuation de RSU / Matching Shares (Por Tranche)")
+        st.caption("Cálculo: Preço da Ação descontado de Dividendos e Lock-up para cada período de vesting.")
+        
         self._manage_tranches()
         tranches = st.session_state['tranches']
-        if st.button("Calcular RSU"):
-            total = 0.0
-            for t in tranches:
-                # Exemplo simplificado de RSU com Lockup
-                base = S * np.exp(-q * t.vesting_date)
-                disc = FinancialMath.calculate_lockup_discount(0.3, analysis.lockup_years, base, q)
-                total += (base - disc) * t.proportion
-            st.metric("Fair Value RSU", f"R$ {total:.4f}")
+        tranche_inputs = []
+
+        if not tranches:
+            st.warning("Nenhuma tranche definida. Adicione tranches acima.")
+            return
+
+        for i, t in enumerate(tranches):
+            with st.expander(f"Tranche {i+1}", expanded=True):
+                c1, c2, c3, c4 = st.columns(4)
+                t_vest = c1.number_input(f"Vesting (Anos) {i}", value=float(t.vesting_date), key=f"rsu_v_{i}")
+                t_lock = c2.number_input(f"Lock-up (Anos) {i}", value=float(analysis.lockup_years), key=f"rsu_l_{i}")
+                t_vol = c3.number_input(f"Volatilidade % (Lockup) {i}", value=30.0, key=f"rsu_vol_{i}") / 100
+                t_prop = c4.number_input(f"Proporção % {i}", value=float(t.proportion * 100), key=f"rsu_prop_{i}") / 100
+                
+                tranche_inputs.append({
+                    "T": t_vest, "lockup": t_lock, "vol": t_vol, "prop": t_prop
+                })
+
+        st.divider()
+        if st.button("Calcular Fair Value (RSU)"):
+            total_fv = 0.0
+            res_data = []
+            
+            for i, inp in enumerate(tranche_inputs):
+                # Base Value: S * exp(-q * T)
+                base_fv = S * np.exp(-q * inp["T"])
+                
+                # Lockup Discount (Chaffe)
+                discount = 0.0
+                if inp["lockup"] > 0:
+                    discount = FinancialMath.calculate_lockup_discount(inp["vol"], inp["lockup"], base_fv, q)
+                
+                unit_fv = base_fv - discount
+                weighted_fv = unit_fv * inp["prop"]
+                total_fv += weighted_fv
+                
+                res_data.append({
+                    "Tranche": i+1, 
+                    "Vesting": inp["T"], 
+                    "Valor Base": base_fv, 
+                    "Desconto": discount, 
+                    "FV Unitário": unit_fv,
+                    "FV Ponderado": weighted_fv
+                })
+            
+            c_res1, c_res2 = st.columns([1, 2])
+            c_res1.metric("Fair Value Total (Ponderado)", f"R$ {total_fv:.4f}")
+            c_res2.dataframe(pd.DataFrame(res_data))
 
     def _render_monte_carlo_ai(self, S, K, r, vol, q, analysis, text, api_key):
         st.warning("⚠️ Monte Carlo via Geração de Código IA")
