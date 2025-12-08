@@ -77,6 +77,7 @@ class DocumentService:
         prompt = f"""
         Você é um Consultor Sênior em Remuneração Executiva e Especialista em IFRS 2 (CPC 10).
         Sua tarefa é analisar o contrato fornecido e gerar um JSON estruturado para precificação e contabilização.
+        A resposta devera ser dada por tópicoms pulando linhas entre tópicos para facilitar leitura identficaçõ de tópicos
 
         DIRETRIZES DE ANÁLISE CRÍTICA (IFRS 2):
         
