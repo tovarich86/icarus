@@ -11,7 +11,7 @@ import streamlit as st
 class MarketDataService:
     """
     Serviço de Dados de Mercado (Backend).
-    Versão Final: Integração total com a lógica do Código de Referência (Tabela 6 + Formatação).
+    Versão Final: Integração total com a lógica do Código de Referência e Correção de Escala.
     """
 
     # =========================================================================
@@ -20,9 +20,8 @@ class MarketDataService:
     @staticmethod
     def get_peer_group_volatility(tickers: List[str], start_date: date, end_date: date) -> Dict[str, Any]:
         results = {}
-        valid_std_values = []
-        valid_ewma_values = []
-        valid_garch_values = []
+        valid_std = []
+        valid_ewma = []
         
         s_str = start_date.strftime("%Y-%m-%d")
         e_str = end_date.strftime("%Y-%m-%d")
@@ -37,23 +36,16 @@ class MarketDataService:
                     results[ticker_raw] = {"error": "Sem dados"}
                     continue
                 
-                # Seleção de coluna robusta
                 series = None
                 if 'Adj Close' in data.columns: series = data['Adj Close']
                 elif 'Close' in data.columns: series = data['Close']
                 
-                if series is None:
-                    results[ticker_raw] = {"error": "Sem coluna de preço"}
-                    continue
-                    
+                if series is None: continue
                 if isinstance(series, pd.DataFrame): series = series.iloc[:, 0]
                 
                 returns = np.log(series / series.shift(1)).dropna()
-                if len(returns) < 30:
-                    results[ticker_raw] = {"error": "Amostra insuficiente"}
-                    continue
+                if len(returns) < 30: continue
 
-                # Cálculos
                 std_vol = returns.std() * np.sqrt(252)
                 ewma_vol = returns.ewm(alpha=(1 - 0.94)).std().iloc[-1] * np.sqrt(252)
                 
@@ -65,22 +57,17 @@ class MarketDataService:
                     garch_vol = np.sqrt(res.forecast(horizon=1).variance.iloc[-1, 0] * 252) / 100
                 except: pass
 
-                valid_std_values.append(std_vol)
-                valid_ewma_values.append(ewma_vol)
-                if garch_vol: valid_garch_values.append(garch_vol)
+                valid_std.append(std_vol)
+                valid_ewma.append(ewma_vol)
+                results[ticker_raw] = {"std_dev": std_vol, "ewma": ewma_vol, "garch": garch_vol, "last_price": float(series.iloc[-1])}
 
-                results[ticker_raw] = {
-                    "std_dev": std_vol, "ewma": ewma_vol, "garch": garch_vol,
-                    "last_price": float(series.iloc[-1])
-                }
-            except Exception as e:
-                results[ticker_raw] = {"error": str(e)}
+            except Exception as e: results[ticker_raw] = {"error": str(e)}
 
         return {
             "summary": {
-                "mean_std": np.mean(valid_std_values) if valid_std_values else 0.0,
-                "mean_ewma": np.mean(valid_ewma_values) if valid_ewma_values else 0.0,
-                "count_valid": len(valid_std_values)
+                "mean_std": np.mean(valid_std) if valid_std else 0.0,
+                "mean_ewma": np.mean(valid_ewma) if valid_ewma else 0.0,
+                "count_valid": len(valid_std)
             },
             "details": results
         }
@@ -91,7 +78,6 @@ class MarketDataService:
 
     @staticmethod
     def gerar_url_di(data_ref: date) -> str:
-        # Garante DD/MM/AAAA
         if isinstance(data_ref, str):
             try: data_ref = datetime.strptime(data_ref, "%Y-%m-%d").date()
             except: pass
@@ -103,7 +89,8 @@ class MarketDataService:
         """Lógica exata do código de referência para converter F26 -> 01/2026"""
         meses = {"F": "01", "G": "02", "H": "03", "J": "04", "K": "05", "M": "06", 
                  "N": "07", "Q": "08", "U": "09", "V": "10", "X": "11", "Z": "12"}
-        if isinstance(di_code, str) and len(di_code) == 3 and di_code[0] in meses:
+        di_code = str(di_code).strip().upper()
+        if len(di_code) == 3 and di_code[0] in meses:
             try:
                 ano = 2000 + int(di_code[1:])
                 return f"{meses[di_code[0]]}/{ano}"
@@ -119,31 +106,31 @@ class MarketDataService:
 
         try:
             response = session.get(url, timeout=15)
-            # 1. Leitura com parâmetros do código de referência
+            # 1. Leitura
             tabelas_dfs = pd.read_html(response.content, encoding='latin1', decimal=',', thousands='.')
 
-            if len(tabelas_dfs) < 7: return pd.DataFrame() # Tabela 7 ausente
+            if len(tabelas_dfs) < 7: return pd.DataFrame() 
 
-            # 2. Seleção direta da Tabela 6
+            # 2. Seleção Tabela 6
             df = tabelas_dfs[6]
             if len(df) < 2: return pd.DataFrame()
 
-            # 3. Limpeza de Cabeçalho (Linha 1 é header, dados começam na 2)
+            # 3. Limpeza de Cabeçalho (Linha 1 é header)
             df.columns = df.iloc[1]
             df = df.iloc[2:].reset_index(drop=True)
 
-            # Remove linha de totais se houver
             if df.iloc[-1, 0] is None or pd.isna(df.iloc[-1, 0]):
                 df = df.iloc[:-1]
 
-            # 4. Mapeamento de Colunas (Referência)
+            # 4. Mapeamento
             mapa_colunas = {
-                'VENC.': 'VENCIMENTO', 
+                'VENCTO': 'VENCIMENTO', 
+                'VENC.': 'VENCIMENTO',
                 'ÚLT. PREÇO': 'ULTIMO PRECO',
-                'ULT. PREÇO': 'ULTIMO PRECO', # Fallback de nome
-                'AJUSTE': 'PRECO AJUSTE'      # Apenas para garantir
+                'ULT. PREÇO': 'ULTIMO PRECO', 
+                'AJUSTE': 'PRECO AJUSTE'      
             }
-            # Renomeia colunas existentes
+            
             cols_found = {}
             for c in df.columns:
                 c_clean = str(c).strip().upper()
@@ -152,37 +139,42 @@ class MarketDataService:
             
             df = df.rename(columns=cols_found)
 
-            if 'VENCIMENTO' not in df.columns or 'ULTIMO PRECO' not in df.columns:
-                return pd.DataFrame()
+            if 'VENCIMENTO' not in df.columns: return pd.DataFrame()
+            
+            # Prioriza ULTIMO PRECO
+            col_preco = 'ULTIMO PRECO' if 'ULTIMO PRECO' in df.columns else 'PRECO AJUSTE'
+            if col_preco not in df.columns: return pd.DataFrame()
 
-            # 5. Processamento dos Dados para o Icarus
+            # 5. Processamento
             clean_data = []
             
             for _, row in df.iterrows():
                 try:
                     venc_cod = row['VENCIMENTO']
-                    taxa_raw = row['ULTIMO PRECO']
+                    taxa_raw = row[col_preco]
                     
                     if pd.isna(venc_cod) or pd.isna(taxa_raw): continue
                     
-                    # Formato Visual (01/2026) usando função de referência
+                    # Formato Visual (01/2026)
                     venc_fmt = MarketDataService.converter_vencimento_ref(venc_cod)
                     if not venc_fmt: continue
                     
-                    # Data Objeto (necessário para dias corridos)
                     dt_venc = datetime.strptime(venc_fmt, "%m/%Y").date()
                     
-                    # Conversão Numérica (pd.read_html já deve ter tratado vírgula se decimal=',')
-                    # Mas garantimos conversão segura
+                    if isinstance(taxa_raw, str):
+                        taxa_raw = taxa_raw.replace('.', '').replace(',', '.')
+                    
                     taxa_val = float(taxa_raw)
                     
-                    # 6. Escala (Normalização para Decimal)
-                    # Se B3 retorna 14.89 (float), Icarus precisa de 0.1489
-                    # Se read_html falhou e leu 1489.0, ajustamos também
-                    if taxa_val > 100:
-                         taxa_val = taxa_val / 1000.0 # Caso extremo
-                    elif taxa_val > 50:
-                         taxa_val = taxa_val / 100.0
+                    # 6. CORREÇÃO DE ESCALA INTELIGENTE
+                    # Se vier > 1000 (ex: 1489.60), divide por 10.000 -> 0.14896 (14.89%)
+                    if taxa_val > 1000:
+                         taxa_val = taxa_val / 10000.0 
+                    # Se vier > 100 (ex: 131.52), divide por 1000 -> 0.13152 (13.15%)
+                    elif taxa_val > 100: 
+                        taxa_val = taxa_val / 1000.0  
+                    # Se vier > 50 (ex: 52), divide por 100 -> 0.52 (Fallback)
+                    # Normal (> 0.5): ex: 13.15 -> 0.1315
                     elif taxa_val > 0.50:
                          taxa_val = taxa_val / 100.0
                     
@@ -190,9 +182,9 @@ class MarketDataService:
                     
                     if dias_corridos > 0:
                         clean_data.append({
-                            "Vencimento_Fmt": venc_fmt,     # Visual (01/2026)
-                            "Vencimento_Str": str(venc_cod),# Código (F26)
-                            "Vencimento_Data": dt_venc,     # Objeto Date
+                            "Vencimento_Fmt": venc_fmt,     # EX: 01/2026
+                            "Vencimento_Str": str(venc_cod),# EX: F26
+                            "Vencimento_Data": dt_venc,
                             "Dias_Corridos": dias_corridos,
                             "Taxa": taxa_val
                         })
@@ -210,7 +202,7 @@ class MarketDataService:
         df_calc = df_di.copy()
         df_calc['diff_days'] = df_calc['Vencimento_Data'].apply(lambda x: abs((x - target_date).days))
         closest = df_calc.loc[df_calc['diff_days'].idxmin()]
-        # Retorna formatado para UI
+        # Retorna o formato amigável para a UI
         return (closest['Vencimento_Fmt'], closest['Taxa'], "Sucesso")
 
     @staticmethod
