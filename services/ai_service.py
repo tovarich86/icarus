@@ -75,7 +75,10 @@ class DocumentService:
         
         # Prompt otimizado para extração JSON
         prompt = f"""
-        Você é um Especialista em IFRS 2 e Atuária. Analise o contrato abaixo.
+        - Você é um Atuário Sênior e Especialista em IFRS 2. Sua filosofia é a PARCIMÔNIA: Utilize sempre o modelo mais simples possível.
+        - Monte Carlo: APENAS se houver 'Market Conditions' (ex: gatilhos de TSR, preço da ação alvo). NÃO recomende Monte Carlo apenas por causa de vesting acelerado ou turnover; isso se ajusta na quantidade/prazo, não no modelo de preço.
+        - RSU/Matching: Se Strike == 0 (ou simbólico), o modelo É 'RSU' (Valor da ação descontado de dividendos). Tranches diferentes são tratadas separadamente.
+        - Binomial: Para opções com lock-up ou exercício antecipado.
         
         TEXTO:
         {text[:45000]}
@@ -83,11 +86,12 @@ class DocumentService:
         Extraia os parâmetros para precificação de opções.
         SAÍDA JSON (ESTRITA):
         {{
-            "contract_features": "Resumo das cláusulas (Vesting, Strike, Lock-up).",
+            "program_summary": "Resumo executivo do programa: Quem recebe, qual o objetivo, quantidade total de instrumentos e regras de desligamento (Bad/Good leaver) de forma resumida.",
+            "deep_rationale": "Justificativa técnica alinhada à filosofia de parcimônia. Se for RSU, explique que é devido à ausência de opcionalidade (Strike Zero).",
             "summary": "Resumo geral.",
             "model_data": {{
-                "recommended_model": "Monte Carlo" | "Binomial" | "Black-Scholes" | "RSU",
-                "deep_rationale": "Justificativa técnica.",
+                "recommended_model": "RSU" | "Binomial" | "Black-Scholes" | "Monte Carlo",
+                "deep_rationale": "Justificativa técnica alinhada à filosofia de parcimônia. Se for RSU, explique que é devido à ausência de opcionalidade (Strike Zero).",
                 "justification": "Frase curta.",
                 "comparison": "Comparação com outros modelos.",
                 "pros": ["Pró 1"], 
