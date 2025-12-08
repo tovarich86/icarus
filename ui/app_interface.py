@@ -1,6 +1,6 @@
 """
 Módulo de Interface do Usuário (UI).
-Versão Final: Binomial Completo + Monte Carlo IA + Callbacks de State.
+Versão UX Friendly: Popover de DI com Tabela Interativa e Seleção Manual Inteligente.
 """
 
 import streamlit as st
@@ -24,7 +24,7 @@ class IFRS2App:
 
     def run(self) -> None:
         st.set_page_config(page_title="Icarus Valuation", layout="wide", page_icon="🛡️")
-        st.title("🛡️ Icarus: Valuation IFRS 2 (Full)")
+        st.title("🛡️ Icarus: Valuation IFRS 2 (Table View)")
         
         # --- Inicialização de Estado ---
         if 'analysis_result' not in st.session_state:
@@ -54,7 +54,7 @@ class IFRS2App:
                 self._handle_analysis(uploaded_files, manual_text, gemini_key)
             
             st.divider()
-            st.caption("v.Release 1.3 - Models Restored")
+            st.caption("v.Release 1.4 - DI Table View")
 
         # --- MAIN ---
         if st.session_state['analysis_result']:
@@ -66,31 +66,12 @@ class IFRS2App:
         else:
             self._render_empty_state()
 
-    # --- CALLBACKS DE ESTADO (CRÍTICO PARA OS POPOVERS) ---
+    # --- CALLBACKS DE ESTADO ---
     def _update_widget_state(self, key_val: str, key_widget: str, value: float):
         """Atualiza o estado antes do rerun para evitar conflito de widget."""
         st.session_state[key_val] = value
         st.session_state[key_widget] = value
-
-    def _rate_search_callback(self, i: int, key_val: str, key_widget: str):
-        """Busca Taxa DI e atualiza estado via callback."""
-        try:
-            key_d1 = f"p_r_d1_{i}"
-            key_d2 = f"p_r_d2_{i}"
-            p_ref = st.session_state.get(key_d1, date.today())
-            p_tgt = st.session_state.get(key_d2, date.today())
-            
-            df_di = MarketDataService.get_di_data_b3(p_ref)
-            if not df_di.empty:
-                _, taxa, _ = MarketDataService.get_closest_di_vertex(p_tgt, df_di)
-                new_rate = taxa * 100
-                st.session_state[key_val] = new_rate
-                st.session_state[key_widget] = new_rate
-                st.toast(f"Taxa DI atualizada: {new_rate:.2f}%", icon="✅")
-            else:
-                st.toast("Dados B3 indisponíveis.", icon="⚠️")
-        except Exception as e:
-            st.toast(f"Erro na busca: {e}", icon="❌")
+        st.toast(f"Valor aplicado: {value:.4f}", icon="✅")
 
     # --- LOGICA DE RENDERIZAÇÃO ---
     def _render_empty_state(self):
@@ -165,14 +146,13 @@ class IFRS2App:
         elif active_model == PricingModelType.BINOMIAL:
             self._render_binomial_graded(S, K, q, analysis)
         elif active_model == PricingModelType.BLACK_SCHOLES_GRADED:
-            self._render_graded(S, K, q, analysis) # Vanilla/Graded
+            self._render_graded(S, K, q, analysis) 
         elif active_model == PricingModelType.RSU:
             self._render_rsu(S, q, analysis)
 
-    # --- RENDERIZADORES ESPECÍFICOS (RESTAURADOS) ---
+    # --- RENDERIZADORES ESPECÍFICOS ---
 
     def _render_binomial_graded(self, S, K, q, analysis):
-        """Renderiza inputs específicos do Binomial (Turnover, M, Strike Index)."""
         st.info("ℹ️ Modelo Binomial: Permite exercício antecipado, turnover e indexação de strike.")
         self._manage_tranches_buttons()
         tranches = st.session_state['tranches']
@@ -181,8 +161,6 @@ class IFRS2App:
         for i, t in enumerate(tranches):
             with st.container(border=True):
                 st.markdown(f"**Tranche {i+1}**")
-                
-                # Linha 1: Dados de Mercado Básicos (Com Callbacks)
                 col_t, col_vol, col_rate = st.columns([1, 1, 1])
                 
                 with col_t:
@@ -192,43 +170,19 @@ class IFRS2App:
                     t_prop = st.number_input(f"Peso (%)", value=float(t.proportion*100), key=f"bi_p_{i}")/100
                 
                 with col_vol:
-                    self._render_vol_widget(i, "bi") # Reuso do widget complexo
+                    self._render_vol_widget(i, "bi")
                     
                 with col_rate:
-                    self._render_rate_widget(i, "bi", t_exp) # Reuso do widget complexo
+                    self._render_rate_widget_table(i, "bi", t_exp) # NOVA VERSÃO TABELA
 
-                # Linha 2: Parâmetros Avançados do Binomial
-                st.markdown("👇 *Parâmetros Avançados (Binomial)*")
+                st.markdown("👇 *Parâmetros Avançados*")
                 c_adv1, c_adv2, c_adv3, c_adv4 = st.columns(4)
                 
-                t_turnover = c_adv1.number_input(
-                    f"Turnover (% a.a.)", 
-                    value=float(analysis.turnover_rate * 100), 
-                    key=f"bi_turn_{i}",
-                    help="Taxa de saída de funcionários (perda do direito antes do vesting)."
-                ) / 100
-                
-                t_m = c_adv2.number_input(
-                    f"Múltiplo M", 
-                    value=float(analysis.early_exercise_multiple), 
-                    key=f"bi_m_{i}",
-                    help="Fator de exercício antecipado (Subótimo). Exerce se S >= M * K."
-                )
-                
-                t_strike_corr = c_adv3.number_input(
-                    f"Corr. Strike (% a.a.)", 
-                    value=4.5 if analysis.has_strike_correction else 0.0, 
-                    key=f"bi_corr_{i}",
-                    help="Indexação do Strike (ex: IGPM + 6%)."
-                ) / 100
-                
-                t_lock = c_adv4.number_input(
-                    f"Lockup (Anos)", 
-                    value=float(analysis.lockup_years), 
-                    key=f"bi_lock_{i}"
-                )
+                t_turnover = c_adv1.number_input(f"Turnover", value=float(analysis.turnover_rate * 100), key=f"bi_turn_{i}") / 100
+                t_m = c_adv2.number_input(f"Múltiplo M", value=float(analysis.early_exercise_multiple), key=f"bi_m_{i}")
+                t_strike_corr = c_adv3.number_input(f"Corr. Strike (%)", value=4.5 if analysis.has_strike_correction else 0.0, key=f"bi_corr_{i}") / 100
+                t_lock = c_adv4.number_input(f"Lockup (Anos)", value=float(analysis.lockup_years), key=f"bi_lock_{i}")
 
-                # Coleta
                 key_vol = f"vol_val_bi_{i}"
                 key_rate = f"rate_val_bi_{i}"
                 
@@ -245,34 +199,27 @@ class IFRS2App:
             self._execute_calc(inputs, PricingModelType.BINOMIAL)
 
     def _render_monte_carlo_ai(self, S, K, q, analysis, text, api_key):
-        """Renderiza interface de Geração de Código IA."""
         st.warning("⚠️ Monte Carlo: Geração de Código via IA (Customizável)")
-        
-        # Parâmetros sugeridos para a IA
         tranches_dates = [t.vesting_date for t in st.session_state['tranches']]
         params = {
-            "S0": S, "K": K, "q": q, 
-            "T": analysis.option_life_years,
+            "S0": S, "K": K, "q": q, "T": analysis.option_life_years,
             "vesting_schedule": tranches_dates,
             "barrier_type": "TSR/Performance" if analysis.has_market_condition else "None"
         }
 
         c1, c2 = st.columns([1, 1])
         if c1.button("1. Gerar Script Python (Gemini)"):
-            with st.spinner("Escrevendo código de simulação..."):
+            with st.spinner("Escrevendo código..."):
                 code = DocumentService.generate_custom_monte_carlo_code(text, params, api_key)
                 st.session_state['mc_code'] = code
         
         if st.session_state['mc_code']:
-            # Editor de Código
-            edited_code = st.text_area("Script de Simulação", st.session_state['mc_code'], height=400)
+            edited_code = st.text_area("Script", st.session_state['mc_code'], height=400)
             st.session_state['mc_code'] = edited_code
-            
             if c2.button("2. Executar Simulação", type="primary"):
                 self._run_custom_code(edited_code)
 
     def _render_graded(self, S, K, q, analysis):
-        """Black-Scholes Graded (Padrão)."""
         self._manage_tranches_buttons()
         tranches = st.session_state['tranches']
         inputs = []
@@ -289,7 +236,7 @@ class IFRS2App:
                 with c2:
                     self._render_vol_widget(i, "bs")
                 with c3:
-                    self._render_rate_widget(i, "bs", t_exp)
+                    self._render_rate_widget_table(i, "bs", t_exp) # NOVA VERSÃO TABELA
 
                 key_vol = f"vol_val_bs_{i}"
                 key_rate = f"rate_val_bs_{i}"
@@ -305,7 +252,6 @@ class IFRS2App:
             self._execute_calc(inputs, PricingModelType.BLACK_SCHOLES_GRADED)
 
     def _render_rsu(self, S, q, analysis):
-        """RSU / Phantom (Valor Intrínseco)."""
         self._manage_tranches_buttons()
         tranches = st.session_state['tranches']
         inputs = []
@@ -318,10 +264,9 @@ class IFRS2App:
                 t_prop = c2.number_input(f"Peso (%)", value=float(t.proportion*100), key=f"rsu_p_{i}")/100
                 t_lock = c3.number_input(f"Lockup (Anos)", value=float(analysis.lockup_years), key=f"rsu_l_{i}")
                 
-                # Volatilidade só para Lockup
                 vol_val = 0.30
                 if t_lock > 0:
-                    st.caption("Volatilidade para Desconto de Lockup:")
+                    st.caption("Volatilidade para Lockup:")
                     self._render_vol_widget(i, "rsu")
                     vol_val = st.session_state.get(f"vol_val_rsu_{i}", 0.30)
                 
@@ -333,9 +278,9 @@ class IFRS2App:
         if st.button("Calcular (RSU)", type="primary"):
             self._execute_calc(inputs, PricingModelType.RSU)
 
-    # --- WIDGETS REUTILIZÁVEIS (VOL & RATE) ---
+    # --- WIDGETS REUTILIZÁVEIS ---
+    
     def _render_vol_widget(self, i, prefix):
-        """Renderiza o par Input + Popover de Volatilidade."""
         st.markdown("Volatilidade (%)")
         c_in, c_pop = st.columns([0.85, 0.15])
         
@@ -344,11 +289,9 @@ class IFRS2App:
         
         if key_val not in st.session_state: st.session_state[key_val] = 30.00
         
-        # Input Principal
         val = c_in.number_input("Vol", value=st.session_state[key_val], key=key_w, label_visibility="collapsed", step=0.5)
         st.session_state[key_val] = val
         
-        # Popover
         with c_pop.popover("🔍"):
             st.markdown("###### Calcular Volatilidade")
             tk = st.text_area("Tickers", "VALE3", key=f"tk_{prefix}_{i}")
@@ -372,8 +315,10 @@ class IFRS2App:
                     st.button("Aplicar", key=f"app_{prefix}_{i}", 
                               on_click=self._update_widget_state, args=(key_val, key_w, opts[sel]))
 
-    def _render_rate_widget(self, i, prefix, t_years):
-        """Renderiza o par Input + Popover de Taxa DI."""
+    def _render_rate_widget_table(self, i, prefix, t_years):
+        """
+        NOVO WIDGET DE DI: Exibe tabela completa e permite seleção.
+        """
         st.markdown("Taxa DI (%)")
         c_in, c_pop = st.columns([0.85, 0.15])
         
@@ -386,21 +331,63 @@ class IFRS2App:
         st.session_state[key_val] = val
         
         with c_pop.popover("📉"):
-            st.markdown("###### Buscar B3")
+            st.markdown("###### Curva DI (B3)")
             d_base = st.date_input("Data Base", date.today(), key=f"db_{prefix}_{i}")
-            d_alvo = d_base + timedelta(days=int(t_years*365))
-            st.date_input("Vencimento Calc", d_alvo, disabled=True)
             
-            st.button("Buscar", key=f"b_r_{prefix}_{i}",
-                      on_click=self._rate_search_callback, args=(i, key_val, key_w))
-            # Obs: callback precisa de ajuste leve se quisermos passar as datas exatas dos inputs dentro do popover, 
-            # mas para simplificar usei a lógica anterior adaptada ou fixa no callback global.
-            # No código completo acima, o _rate_search_callback usa chaves fixas p_r_d1_{i}, preciso adaptar as chaves no callback.
-            # *Correção Rápida*: O callback genérico `_rate_search_callback` lá em cima usa chaves fixas. 
-            # Vou deixar o callback genérico exigindo as chaves `p_r_d1_{i}`. 
-            # Para este método reusável funcionar perfeito, as chaves de data devem bater.
-            # Ajustando as chaves deste método para bater com o callback:
-            # Chaves usadas aqui: f"p_r_d1_{i}" e f"p_r_d2_{i}" (para manter compatibilidade com o callback definido antes).
+            # Key para armazenar o DataFrame da curva
+            k_df = f"df_di_{prefix}_{i}"
+            
+            if st.button("Carregar Tabela DI", key=f"b_load_di_{prefix}_{i}"):
+                with st.spinner("Buscando B3..."):
+                    df = MarketDataService.get_di_data_b3(d_base)
+                    st.session_state[k_df] = df
+            
+            if k_df in st.session_state:
+                df = st.session_state[k_df]
+                
+                if not df.empty:
+                    # 1. Exibe a tabela (Top 10 ou Scroll)
+                    st.dataframe(
+                        df[['Vencimento_Str', 'Dias_Corridos', 'Taxa']], 
+                        use_container_width=True, 
+                        height=200,
+                        hide_index=True
+                    )
+                    
+                    # 2. Prepara Opções para o Selectbox
+                    # Cria uma coluna formatada para o usuário escolher
+                    df['Option_Label'] = df.apply(
+                        lambda x: f"{x['Vencimento_Str']} ({x['Dias_Corridos']}d) - {x['Taxa']*100:.2f}%", 
+                        axis=1
+                    )
+                    
+                    # 3. Sugestão Automática (Closest Vertex)
+                    # Encontra o índice da opção mais próxima de t_years
+                    target_days = t_years * 365
+                    idx_closest = (df['Dias_Corridos'] - target_days).abs().idxmin()
+                    
+                    # 4. Selectbox
+                    selected_label = st.selectbox(
+                        "Selecione o Vértice:", 
+                        options=df['Option_Label'],
+                        index=int(idx_closest), # Pré-seleciona o sugerido
+                        key=f"sel_di_{prefix}_{i}"
+                    )
+                    
+                    # Extrai a taxa da string selecionada ou busca no df
+                    selected_row = df[df['Option_Label'] == selected_label].iloc[0]
+                    sel_taxa = selected_row['Taxa'] * 100
+                    
+                    # 5. Botão Aplicar
+                    st.button(
+                        f"Aplicar {sel_taxa:.2f}%", 
+                        key=f"b_apply_di_{prefix}_{i}",
+                        on_click=self._update_widget_state,
+                        args=(key_val, key_w, sel_taxa)
+                    )
+                    
+                else:
+                    st.warning("Nenhum dado encontrado para esta data.")
 
     # --- EXECUÇÃO ---
     def _run_custom_code(self, code):
