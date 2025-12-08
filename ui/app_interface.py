@@ -317,8 +317,7 @@ class IFRS2App:
 
     def _render_rate_widget_table(self, i, prefix, t_years):
         """
-        WIDGET DE DI OTIMIZADO: Tabela Interativa e Seleção Manual.
-        Correção: Callback no botão para evitar StreamlitAPIException e ajuste de colunas.
+        WIDGET DE DI OTIMIZADO: Tabela com Formatação de Referência e Callbacks Seguros.
         """
         st.markdown("Taxa DI (%)")
         c_in, c_pop = st.columns([0.85, 0.15])
@@ -326,24 +325,27 @@ class IFRS2App:
         key_val = f"rate_val_{prefix}_{i}"
         key_w = f"rate_w_{prefix}_{i}"
         
+        # Inicialização
         if key_val not in st.session_state: 
             st.session_state[key_val] = 10.75
         
-        # Exibe valor percentual (10.75) mas armazena decimal (0.1075)
+        # Sincronização Input <-> Session State
+        # Se o usuário digitar no input, atualizamos o session_state
+        current_pct = st.session_state[key_val] * 100
         val = c_in.number_input(
             "Rate", 
-            value=float(st.session_state[key_val] * 100) if st.session_state[key_val] < 1.0 else float(st.session_state[key_val]), 
+            value=float(current_pct), 
             key=key_w, 
             label_visibility="collapsed", 
             step=0.1,
             format="%.2f"
         )
-        # Atualiza estado decimal se o usuário digitar manualmente
-        if val > 0.50:
-            st.session_state[key_val] = val / 100.0
-        else:
-            st.session_state[key_val] = val
         
+        # Atualização manual do input (evita loop se não mudou)
+        new_decimal = val / 100.0
+        if abs(new_decimal - st.session_state[key_val]) > 1e-6:
+             st.session_state[key_val] = new_decimal
+
         with c_pop.popover("📉"):
             st.markdown("###### Consulta DI Futuro (B3)")
             
@@ -364,30 +366,31 @@ class IFRS2App:
             if k_df in st.session_state and not st.session_state[k_df].empty:
                 df = st.session_state[k_df]
                 
-                # --- AJUSTE VISUAL (Tabela Limpa) ---
+                # --- VISUALIZAÇÃO FORMATADA (01/2026) ---
                 df_show = df.copy()
                 df_show['Taxa (%)'] = (df_show['Taxa'] * 100).map('{:.2f}'.format)
-                df_show['Mês/Ano Vencimento'] = df_show['Vencimento_Str'] # Renomeia para visualização
+                
+                # Usa a coluna formatada que vem do serviço ou cria fallback
+                col_venc_show = 'Vencimento_Fmt' if 'Vencimento_Fmt' in df.columns else 'Vencimento_Str'
                 
                 st.caption("Taxas Disponíveis:")
-                # Exibe apenas as colunas solicitadas
                 st.dataframe(
-                    df_show[['Mês/Ano Vencimento', 'Taxa (%)']], 
+                    df_show[[col_venc_show, 'Taxa (%)']].rename(columns={col_venc_show: 'Vencimento'}), 
                     use_container_width=True, 
                     height=200,
                     hide_index=True
                 )
                 
-                # Seletor Inteligente
+                # --- SELETOR ---
                 df['Label'] = df.apply(
-                    lambda x: f"{x['Vencimento_Str']} - {x['Taxa']*100:.2f}%", 
+                    lambda x: f"{x[col_venc_show]} - {x['Taxa']*100:.2f}%", 
                     axis=1
                 )
                 
                 target_days = t_years * 365
                 idx_closest = (df['Dias_Corridos'] - target_days).abs().idxmin()
                 
-                st.markdown("**Selecione o Vencimento:**")
+                st.markdown("**Selecione:**")
                 selected_label = st.selectbox(
                     "Vencimento", 
                     options=df['Label'],
@@ -396,11 +399,10 @@ class IFRS2App:
                     label_visibility="collapsed"
                 )
                 
-                # --- CALLBACK PARA CORRIGIR O ERRO ---
-                def apply_rate_callback(k_decimal, k_widget, taxa_decimal):
-                    """Atualiza o estado antes do rerun para evitar erro de widget ID"""
+                # --- CALLBACK (CORREÇÃO DO ERRO API) ---
+                # Função chamada ANTES de renderizar, segura para alterar Session State
+                def apply_rate_callback(k_decimal, taxa_decimal):
                     st.session_state[k_decimal] = taxa_decimal
-                    # Não precisamos atualizar k_widget manualmente, o rerun fará o widget ler k_decimal
                 
                 if selected_label:
                     row = df[df['Label'] == selected_label].iloc[0]
@@ -410,11 +412,11 @@ class IFRS2App:
                         f"Usar {selected_label}", 
                         key=f"b_apply_di_{prefix}_{i}",
                         on_click=apply_rate_callback,
-                        args=(key_val, key_w, sel_taxa_decimal)
+                        args=(key_val, sel_taxa_decimal)
                     )
             
             elif k_df in st.session_state:
-                st.error("Nenhum dado encontrado.")
+                st.error("Nenhum dado encontrado para esta data.")
 
     # --- EXECUÇÃO ---
     def _run_custom_code(self, code):
