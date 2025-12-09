@@ -414,9 +414,11 @@ class IFRS2App:
                 col_venc = 'Vencimento_Fmt' if 'Vencimento_Fmt' in df.columns else 'Vencimento_Str'
                 
                 st.caption("Taxas Disponíveis:")
+                
+                # --- CORREÇÃO DO ERRO DE WIDTH AQUI ---
                 st.dataframe(
                     df_show[[col_venc, 'Taxa (%)']].rename(columns={col_venc: 'Vencimento'}), 
-                    width=None, # Ajuste automático
+                    use_container_width=True, # Corrigido de width='stretch'
                     height=200,
                     hide_index=True
                 )
