@@ -94,7 +94,8 @@ class DocumentService:
         prompt = f"""
         Você é um Especialista em IFRS 2 (CPC 10). Analise o contrato e gere um JSON para precificação.
         REGRAS DE EXTRAÇÃO DE TEXTO ("valuation_params"):
-        1. A PRIMEIRA LINHA de "valuation_params" DEVE SER OBRIGATORIAMENTE: "Modelo Recomendado: [Nome do Modelo]"
+        1. A PRIMEIRA LINHA de "valuation_params" DEVE SER OBRIGATORIAMENTE: "Modelo Recomendado: [Nome do Modelo], 
+        2. Modelagem: Se houver possibilidade de exercício antecipado (Janela entre Vesting e Vencimento)superior a 6 meses, prefira 'Binomial' sobre 'Black-Scholes', assim como se houver ajuste do strike price.
         2. Em seguida, liste: Strike, Spot (se houver), preço do ativo  subjacente, Volatilidade implícita no texto,carência e vida de cada tranch Vida da Opção, indicador de performance de mercado e/ou não mercado se houver, .
         3. Tratamento de Dividendos: Explique claramente se o yield deve ser considerado (q > 0) ou se há proteção de strike (q = 0).
 
