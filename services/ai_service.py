@@ -79,7 +79,7 @@ class DocumentService:
             
         genai.configure(api_key=api_key)
         generation_config = {
-            "temperature": 0.1, # Reduz criatividade desnecessária, foca em precisão
+            "temperature": 0.5, # Reduz criatividade desnecessária, foca em precisão
             "response_mime_type": "application/json" # Força saída JSON nativa
         }
 
