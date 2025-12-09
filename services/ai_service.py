@@ -99,6 +99,11 @@ class DocumentService:
         2. Modelagem: Se houver possibilidade de exercício antecipado (Janela entre Vesting e Vencimento)superior a 6 meses, prefira 'Binomial' sobre 'Black-Scholes', assim como se houver ajuste do strike price.
         2. Em seguida, liste: Strike, Spot (se houver), preço do ativo  subjacente, Volatilidade implícita no texto,carência e vida de cada tranch Vida da Opção, indicador de performance de mercado e/ou não mercado se houver, .
         3. Tratamento de Dividendos: Explique claramente se o yield deve ser considerado (q > 0) ou se há proteção de strike (q = 0).
+        4.  NÃO seja breve. Escreva um parágrafo detalhado (4 a 8 linhas).
+        5.  Cite explicitamente os termos do CPC 10 / IFRS 2.
+        6.  Justifique a escolha do modelo contrastando com as limitações dos outros.
+            - Ex: "O modelo Binomial é exigido conforme parágrafo B5 do CPC 10 pois captura o exercício antecipado (Opção Americana), algo que o Black-Scholes não faz..."
+            - Ex: "Devido à 'Condição de Mercado' (TSR), o CPC 10 exige modelo estocástico (Monte Carlo) para refletir a volatilidade conjunta..."
 
         ATENÇÃO CRÍTICA À FORMATAÇÃO JSON:
         
