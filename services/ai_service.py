@@ -85,7 +85,7 @@ class DocumentService:
         }
 
         model = genai.GenerativeModel(
-            model_name='gemini-2.5-flash-lite', # Use explicitamente o 2.5 Flash para velocidade máxima
+            model_name='gemini-2.0-flash', # Use explicitamente o 2.5 Flash para velocidade máxima
             generation_config=generation_config
         )
         
