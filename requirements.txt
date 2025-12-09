@@ -13,3 +13,4 @@ webdriver-manager
 selenium
 beautifulsoup4
 scipy
+xlsxwriter
