@@ -83,6 +83,10 @@ class DocumentService:
         # Prompt Reforçado para evitar erros de sintaxe JSON
         prompt = f"""
         Você é um Especialista em IFRS 2 (CPC 10). Analise o contrato e gere um JSON para precificação.
+        REGRAS DE EXTRAÇÃO DE TEXTO ("valuation_params"):
+        1. A PRIMEIRA LINHA de "valuation_params" DEVE SER OBRIGATORIAMENTE: "Modelo Recomendado: [Nome do Modelo]"
+        2. Em seguida, liste: Strike, Spot (se houver), preço do ativo  subjacente, Volatilidade implícita no texto,carência e vida de cada tranch Vida da Opção, indicador de performance de mercado e/ou não mercado se houver, .
+        3. Tratamento de Dividendos: Explique claramente se o yield deve ser considerado (q > 0) ou se há proteção de strike (q = 0).
 
         ATENÇÃO CRÍTICA À FORMATAÇÃO JSON:
         1. A saída deve ser APENAS um JSON válido.
