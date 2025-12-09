@@ -101,10 +101,16 @@ class IFRS2App:
             c1, c2 = st.columns(2)
             with c1:
                 settlement = getattr(analysis, 'settlement_type', SettlementType.EQUITY_SETTLED)
+                
+                # Recupera o nome do modelo para exibição
+                model_label = analysis.model_recommended.value if analysis.model_recommended else "Indefinido"
+
+                # Exibe Liquidação E Modelo na mesma caixa de status
                 if settlement == SettlementType.CASH_SETTLED:
-                    st.error(f"⚠️ PASSIVO (Liability) - {settlement.value}")
+                    st.error(f"⚠️ PASSIVO (Liability) - {settlement.value}\n\n📉 **Modelo Recomendado:** {model_label}")
                 else:
-                    st.success(f"✅ EQUITY (Patrimônio) - {settlement.value}")
+                    st.success(f"✅ EQUITY (Patrimônio) - {settlement.value}\n\n🚀 **Modelo Recomendado:** {model_label}")
+                
                 st.info(analysis.methodology_rationale)
             with c2:
                 st.markdown("**Parâmetros Extraídos:**")
