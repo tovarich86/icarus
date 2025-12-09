@@ -97,24 +97,35 @@ class IFRS2App:
 
     def _render_dashboard(self, analysis: PlanAnalysisResult, full_text: str, api_key: str):
         st.subheader("2. Diagnóstico")
+        
+        # Container Visual
         with st.container():
-            c1, c2 = st.columns(2)
+            c1, c2 = st.columns([1, 1]) # Divisão 50% / 50%
+            
+            # --- COLUNA DA ESQUERDA: Status + Resumo do Plano ---
             with c1:
                 settlement = getattr(analysis, 'settlement_type', SettlementType.EQUITY_SETTLED)
-                
-                # Recupera o nome do modelo para exibição
                 model_label = analysis.model_recommended.value if analysis.model_recommended else "Indefinido"
 
-                # Exibe Liquidação E Modelo na mesma caixa de status
+                # 1. Caixa de Status (Verde/Vermelho)
                 if settlement == SettlementType.CASH_SETTLED:
-                    st.error(f"⚠️ PASSIVO (Liability) - {settlement.value}\n\n📉 **Modelo Recomendado:** {model_label}")
+                    st.error(f"⚠️ PASSIVO (Liability) - {settlement.value}\n\n **Modelo Recomendado:** {model_label}")
                 else:
-                    st.success(f"✅ EQUITY (Patrimônio) - {settlement.value}\n\n🚀 **Modelo Recomendado:** {model_label}")
+                    st.success(f"✅ EQUITY (Patrimônio) - {settlement.value}\n\n **Modelo Recomendado:** {model_label}")
                 
-                st.info(analysis.methodology_rationale)
+                # 2. Caixa Azul: Agora exibe o RESUMO DO PLANO (Features)
+                # Usamos program_summary (resumo narrativo) ou contract_features (lista de cláusulas)
+                resumo_txt = analysis.program_summary if analysis.program_summary else analysis.contract_features
+                st.info(f"📋 **Resumo do Programa:**\n\n{resumo_txt}")
+
+            # --- COLUNA DA DIREITA: Premissas de Valuation ---
             with c2:
-                st.markdown("**Parâmetros Extraídos:**")
-                st.caption(getattr(analysis, 'valuation_params', analysis.summary))
+                st.markdown("### 📊 Premissas de Valuation")
+                
+                # Usamos st.markdown para garantir que as quebras de linha e bullet points funcionem
+                # O valuation_params virá formatado da IA
+                params_txt = getattr(analysis, 'valuation_params', analysis.summary)
+                st.markdown(params_txt)
 
         st.divider()
 
