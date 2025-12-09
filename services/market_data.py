@@ -122,13 +122,13 @@ class MarketDataService:
                     if not venc_fmt: continue
                     dt_venc = datetime.strptime(venc_fmt, "%m/%Y").date()
                     
-                    if isinstance(taxa_raw, str): taxa_raw = taxa_raw.replace('.', '').replace(',', '.')
+                    if isinstance(taxa_raw, str): 
+                        taxa_raw = taxa_raw.replace('.', '').replace(',', '.')
                     
-                    # === LÓGICA DE ESCALA DINÂMICA ===
-                    # Divide por 10 até que o valor seja < 0.40 (40%)
-                    val = float(taxa_raw)
-                    while val > 0.40:
-                        val /= 10.0
+                    # === CORREÇÃO APLICADA (REGRA DETERMINÍSTICA) ===
+                    # Padrão Brasileiro c/ 4 casas (ex: 1075 representa 10.75%)
+                    # Converte para decimal unitário: 1075 / 10000 = 0.1075
+                    val = float(taxa_raw) / 10000.0
                     
                     dias_corridos = (dt_venc - reference_date).days
                     if dias_corridos > 0:
