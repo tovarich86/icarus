@@ -109,7 +109,7 @@ class DocumentService:
         - Prazos: Diferencie Vesting (Carência) de Expiration (Vencimento total).
 
         TEXTO DO CONTRATO:
-        {text[:45000]}
+        {text[:80000]}
 
         SAÍDA JSON (ESTRITA):
         {{
