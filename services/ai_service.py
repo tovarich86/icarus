@@ -80,7 +80,7 @@ class DocumentService:
         genai.configure(api_key=api_key)
         
         generation_config = {
-            "temperature": 0.2, # Baixa temperatura para seguir regras estritas
+            "temperature": 0.4, # Baixa temperatura para seguir regras estritas
             "response_mime_type": "application/json",
             "max_output_tokens": 4000
         }
