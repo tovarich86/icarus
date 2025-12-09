@@ -38,6 +38,7 @@ class FinancialMath:
         # 1. Correção Matemática: Converter Taxa Efetiva (DI) para Contínua (Log-Return)
         # Se r_eff for muito pequeno, ln(1+r) ~ r, mas para 13% faz diferença.
         r = np.log(1 + r_eff)
+        q = np.log(1 + q_in)
 
         if T <= EPSILON: return max(S - K, 0.0)
         if sigma <= EPSILON:
@@ -60,6 +61,7 @@ class FinancialMath:
     ):
         # 1. Correção da Taxa para Contínua
         r = np.log(1 + r_effective)
+        q = np.log(1 + q_in)
 
         # 2. Proteção de Volatilidade
         if vol < 1e-5:
