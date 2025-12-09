@@ -21,6 +21,7 @@ class ModelSelectorService:
         Novas Regras de Decisão:
         1. Classificação Contábil: Alerta sobre remensuração se for Cash-Settled.
         2. Gap de Exercício: Usa dados precisos das tranches para sugerir Binomial.
+        3. IA Authority: Respeita a sugestão inicial da IA se for Binomial.
         """
         
         # ---------------------------------------------------------------------
@@ -74,7 +75,6 @@ class ModelSelectorService:
         # 3. Características Americanas / Barreiras -> Binomial
         # ---------------------------------------------------------------------
         # Cálculo mais preciso do "Gap de Exercício" (Janela de Oportunidade)
-        # Se a opção vence muito tempo depois de vestir, o valor do exercício antecipado (Americano) é relevante.
         
         avg_vesting = analysis.get_avg_vesting()
         
@@ -86,22 +86,29 @@ class ModelSelectorService:
 
         gap_exercicio = avg_life - avg_vesting
         
-        # Critérios para Binomial
-        complex_features = (
+        # Verifica se a IA já recomendou Binomial explicitamente
+        ia_suggests_binomial = (analysis.model_recommended == PricingModelType.BINOMIAL)
+        
+        # Critérios Combinados para Binomial
+        should_use_binomial = (
+            ia_suggests_binomial or                 # Respeita a IA (Prioridade)
             analysis.has_strike_correction or       # Strike indexado (IGPM, etc)
-            gap_exercicio > 0.5 or                  # Janela de exercício longa (Valor de tempo relevante)
+            gap_exercicio > 0.5 or                  # Janela de exercício longa (> 6 meses)
             analysis.lockup_years > 0               # Restrição de venda pós-exercício
         )
 
-        if complex_features:
+        if should_use_binomial:
             analysis.model_recommended = PricingModelType.BINOMIAL
             
-            if not analysis.methodology_rationale:
+            # Se o racional estiver vazio ou mencionar Black-Scholes incorretamente, atualiza
+            if not analysis.methodology_rationale or "Black-Scholes" in analysis.methodology_rationale:
                 analysis.methodology_rationale = (
-                    f"O plano possui características 'Americanas' (Janela de exercício de ~{gap_exercicio:.1f} anos) "
-                    "ou barreiras complexas (Lock-up/Correção). O modelo Binomial (Lattice) é superior ao "
-                    "Black-Scholes pois captura a decisão ótima de exercício antecipado e descontos de iliquidez."
-                )
+                    f"Modelo Binomial selecionado. Fatores determinantes: "
+                    f"{'Recomendação IA, ' if ia_suggests_binomial else ''}"
+                    f"{'Janela de Exercício Americana (~{gap_exercicio:.1f} anos), ' if gap_exercicio > 0.5 else ''}"
+                    f"{'Lock-up, ' if analysis.lockup_years > 0 else ''}"
+                    f"{'Correção de Strike.' if analysis.has_strike_correction else ''}"
+                ).strip(", ")
             return analysis
 
         # ---------------------------------------------------------------------
@@ -111,7 +118,7 @@ class ModelSelectorService:
         
         if not analysis.methodology_rationale:
             analysis.methodology_rationale = (
-                "O plano segue estrutura padrão (Opção Europeia/Plain Vanilla) sem gatilhos complexos. "
+                "Estrutura padrão (Opção Europeia/Plain Vanilla) sem barreiras complexas ou janelas longas de exercício. "
                 "O Black-Scholes-Merton (Graded) é o padrão de mercado mais eficiente, "
                 "calculando cada tranche individualmente."
             )
