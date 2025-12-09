@@ -80,12 +80,12 @@ class DocumentService:
         genai.configure(api_key=api_key)
         generation_config = {
             "temperature": 0.4, # Reduz criatividade desnecessária, foca em precisão
-            "response_mime_type": "application/json" # Força saída JSON nativa
+            "response_mime_type": "application/json", # Força saída JSON nativa
             "max_output_tokens": 4000
         }
 
         model = genai.GenerativeModel(
-            model_name='gemini-2.5-flash-lite', # Use explicitamente o 1.5 Flash para velocidade máxima
+            model_name='gemini-2.5-flash-lite', # Use explicitamente o 2.5 Flash para velocidade máxima
             generation_config=generation_config
         )
         
