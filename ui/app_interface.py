@@ -351,14 +351,10 @@ class IFRS2App:
                 res = st.session_state[k_res]
                 if "summary" in res:
                     summ = res['summary']
-                    
-                    # --- ATUALIZAÇÃO AQUI ---
                     opts = {
                         f"EWMA: {summ['mean_ewma']*100:.1f}%": summ['mean_ewma']*100,
                         f"Hist: {summ['mean_std']*100:.1f}%": summ['mean_std']*100
                     }
-                    
-                    # Adiciona GARCH dinamicamente se foi calculado (> 0)
                     if summ.get('mean_garch', 0) > 0:
                         opts[f"GARCH: {summ['mean_garch']*100:.1f}%"] = summ['mean_garch']*100
                     
@@ -366,6 +362,16 @@ class IFRS2App:
                     
                     st.button("Aplicar", key=f"app_{prefix}_{i}", 
                               on_click=self._update_widget_state, args=(key_val, key_w, opts[sel]))
+                              
+                    # --- NOVO: Botão de Download para Auditoria ---
+                    if "audit_excel" in res and res["audit_excel"]:
+                         st.download_button(
+                            label="💾 Baixar Auditoria (Excel)",
+                            data=res["audit_excel"],
+                            file_name=f"auditoria_volatilidade_tranche_{i+1}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"dl_vol_{prefix}_{i}"
+                        )
 
     def _render_rate_widget_table(self, i, prefix, t_years):
         """
