@@ -20,8 +20,11 @@ class MarketDataService:
         results = {}
         valid_std = []
         valid_ewma = []
+        valid_garch = []  # <--- NOVO: Lista para acumular GARCHs válidos
+        
         s_str = start_date.strftime("%Y-%m-%d")
         e_str = end_date.strftime("%Y-%m-%d")
+        
         for ticker_raw in tickers:
             ticker = ticker_raw.strip().upper()
             if not ticker.endswith(".SA") and any(char.isdigit() for char in ticker): ticker += ".SA"
@@ -35,22 +38,48 @@ class MarketDataService:
                 elif 'Close' in data.columns: series = data['Close']
                 if series is None: continue
                 if isinstance(series, pd.DataFrame): series = series.iloc[:, 0]
+                
                 returns = np.log(series / series.shift(1)).dropna()
                 if len(returns) < 30: continue
+                
                 std_vol = returns.std() * np.sqrt(252)
                 ewma_vol = returns.ewm(alpha=(1 - 0.94)).std().iloc[-1] * np.sqrt(252)
+                
+                # Cálculo GARCH
+                garch_vol = None
                 try:
                     r_scaled = returns * 100 
                     model = arch_model(r_scaled, vol='Garch', p=1, q=1, rescale=False)
                     res = model.fit(disp='off', show_warning=False)
-                    garch_vol = np.sqrt(res.forecast(horizon=1).variance.iloc[-1, 0] * 252) / 100
-                except: garch_vol = None
+                    calc_garch = np.sqrt(res.forecast(horizon=1).variance.iloc[-1, 0] * 252) / 100
+                    
+                    if calc_garch is not None and not np.isnan(calc_garch):
+                        garch_vol = calc_garch
+                        valid_garch.append(garch_vol) # <--- NOVO: Guarda valor válido
+                except: 
+                    garch_vol = None
+
                 valid_std.append(std_vol)
                 valid_ewma.append(ewma_vol)
-                results[ticker_raw] = {"std_dev": std_vol, "ewma": ewma_vol, "garch": garch_vol, "last_price": float(series.iloc[-1])}
+                
+                results[ticker_raw] = {
+                    "std_dev": std_vol, 
+                    "ewma": ewma_vol, 
+                    "garch": garch_vol, 
+                    "last_price": float(series.iloc[-1])
+                }
             except Exception as e: results[ticker_raw] = {"error": str(e)}
-        return {"summary": {"mean_std": np.mean(valid_std) if valid_std else 0.0, "mean_ewma": np.mean(valid_ewma) if valid_ewma else 0.0, "count_valid": len(valid_std)}, "details": results}
-
+        
+        # Retorno com a média do GARCH incluída
+        return {
+            "summary": {
+                "mean_std": np.mean(valid_std) if valid_std else 0.0, 
+                "mean_ewma": np.mean(valid_ewma) if valid_ewma else 0.0, 
+                "mean_garch": np.mean(valid_garch) if valid_garch else 0.0, # <--- NOVO
+                "count_valid": len(valid_std)
+            }, 
+            "details": results
+        }
     # --- MÓDULO DI FUTURO (ATUALIZADO) ---
 
     @staticmethod
