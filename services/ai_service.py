@@ -78,57 +78,62 @@ class DocumentService:
             return None
             
         genai.configure(api_key=api_key)
+        
         generation_config = {
-            "temperature": 0.4, # Reduz criatividade desnecessária, foca em precisão
-            "response_mime_type": "application/json", # Força saída JSON nativa
+            "temperature": 0.2, # Baixa temperatura para seguir regras estritas
+            "response_mime_type": "application/json",
             "max_output_tokens": 4000
         }
 
+        # Recomendação: Use gemini-1.5-flash para equilíbrio entre velocidade e raciocínio
         model = genai.GenerativeModel(
-            model_name='gemini-2.0-flash', # Use explicitamente o 2.5 Flash para velocidade máxima
+            model_name='gemini-2.0-flash', 
             generation_config=generation_config
         )
         
-        # Prompt Reforçado para evitar erros de sintaxe JSON
-        # 1. A saída deve ser APENAS um JSON válido.
-        # 2. NÃO use quebras de linha reais dentro das strings. Use o caractere de escape \\n literal.
         prompt = f"""
-        Você é um Especialista em IFRS 2 (CPC 10). Analise o contrato e gere um JSON para precificação.
-        REGRAS DE EXTRAÇÃO DE TEXTO ("valuation_params"):
-              
-        1. "program_summary" (Para a Caixa Azul):
-           - Deve ser um resumo narrativo claro dos principais tópicos do plano.
-           - Foque em: O que é o plano? Quem recebe? Qual o gatilho principal?
-        
-        2. "valuation_params" (Para a Coluna Lateral):
-           - OBRIGATÓRIO: Use FORMATO DE LISTA (Markdown Bullet Points) para cada item.
-           - Pule uma linha entre cada bullet point para facilitar a leitura.
-           - Liste: Strike, Spot, Volatilidade, Carência (Vesting), Vida (Expiration), Dividendos.
-           - Exemplo de formato:
-             * **Strike:** R$ 10,00 fixo.
-             
-             * **Vesting:** 3 anos em cliff.
-             
-             * **Dividendos:** Não recebe durante a carência
-        1. A PRIMEIRA LINHA de "valuation_params" DEVE SER OBRIGATORIAMENTE: "Modelo Recomendado: [Nome do Modelo], 
-        2. Modelagem: Se houver possibilidade de exercício antecipado (Janela entre Vesting e Vencimento)superior a 6 meses, prefira 'Binomial' sobre 'Black-Scholes', assim como se houver ajuste do strike price.
-        2. Em seguida, liste: Strike, Spot (se houver), preço do ativo  subjacente, Volatilidade implícita no texto,carência e vida de cada tranch Vida da Opção, indicador de performance de mercado e/ou não mercado se houver, .
-        3. Tratamento de Dividendos: Explique claramente se o yield deve ser considerado (q > 0) ou se há proteção de strike (q = 0).
-        4.  NÃO seja breve. Escreva um parágrafo detalhado (4 a 8 linhas).
-        5.  Cite explicitamente os termos do CPC 10 / IFRS 2.
-        6.  Justifique a escolha do modelo contrastando com as limitações dos outros.
-            - Ex: "O modelo Binomial é exigido conforme parágrafo B5 do CPC 10 pois captura o exercício antecipado (Opção Americana), algo que o Black-Scholes não faz..."
-            - Ex: "Devido à 'Condição de Mercado' (TSR), o CPC 10 exige modelo estocástico (Monte Carlo) para refletir a volatilidade conjunta..."
+        Você é um Auditor Especialista em IFRS 2 (CPC 10). Analise o contrato e gere um JSON para precificação.
 
-        ATENÇÃO CRÍTICA À FORMATAÇÃO JSON:
-        
-        1. Se houver aspas duplas " dentro de um texto, elas DEVEM ser escapadas como \\".
-        2. Verifique se todas as chaves e valores estão fechados corretamente.
+        ### 1. ÁRVORE DE DECISÃO DE MODELO (CRÍTICO - CPC 10)
+        Analise as cláusulas de vesting e escolha o modelo baseado estritamente abaixo:
 
-        DIRETRIZES TÉCNICAS:
-        - Classificação: EQUITY_SETTLED (Ações) vs CASH_SETTLED (Caixa/Phantom).
-        - Dividendos: Se o participante não recebe dividendos na carência, o modelo deve descontar o yield.
-        - Prazos: Diferencie Vesting (Carência) de Expiration (Vencimento total).
+        A) CONDIÇÃO DE MERCADO (Market Condition)? [Ref: CPC 10, Apêndice A]
+           - Gatilhos: Preço da ação, TSR, Comparação com Índices (Ibovespa).
+           - MODELO: "Monte Carlo". (Obrigatório para simular trajetória).
+
+        B) CONDIÇÃO DE NÃO-MERCADO (Non-Market)? [Ref: CPC 10, Item 19]
+           - Gatilhos: EBITDA, Lucro Líquido, Receita, Metas Operacionais.
+           - MODELO: "Black-Scholes" ou "Binomial".
+           - REGRA: PROIBIDO "Monte Carlo". A meta afeta apenas a quantidade (Vesting), não o preço unitário.
+
+        C) EXERCÍCIO ANTECIPADO (Americano)? [Ref: CPC 10, B5]
+           - Se existe janela de exercício > 6 meses entre Vesting e Vencimento.
+           - MODELO: "Binomial" (Preferível ao Black-Scholes).
+
+        D) STRIKE ZERO?
+           - Se Preço de Exercício é simbólico ou R$ 0,00.
+           - MODELO: "RSU".
+
+        ### 2. REGRAS DE FORMATAÇÃO DE TEXTO
+        
+        **Campo "program_summary" (Narrativo):**
+        - Resuma: O que é o plano, quem recebe e qual o gatilho principal.
+
+        **Campo "valuation_params" (Visual - Markdown):**
+        - OBRIGATÓRIO: Use Bullet Points (*) com uma linha em branco entre eles.
+        - Exemplo:
+          * **Strike:** R$ 10,00.
+          
+          * **Vesting:** 3 anos cliff.
+          
+          * **Volatilidade:** Implícita de 30%.
+
+        **Campo "deep_rationale" (Técnico):**
+        - Escreva 4-8 linhas justificando a escolha.
+        - Se for EBITDA (Não-Mercado), explique que isso impacta a quantidade e não o preço unitário (Item 19).
+        - Cite o CPC 10.
+
+        ### 3. CONTEXTO DO CONTRATO
 
         TEXTO DO CONTRATO:
         {text[:80000]}
