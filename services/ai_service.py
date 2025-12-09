@@ -80,7 +80,7 @@ class DocumentService:
         genai.configure(api_key=api_key)
         
         generation_config = {
-            "temperature": 0.4, # Baixa temperatura para seguir regras estritas
+            "temperature": 0.5, # Baixa temperatura para seguir regras estritas
             "response_mime_type": "application/json",
             "max_output_tokens": 4000
         }
@@ -129,9 +129,25 @@ class DocumentService:
           * **Volatilidade:** Implícita de 30%.
 
         **Campo "deep_rationale" (Técnico):**
-        - Escreva 4-8 linhas justificando a escolha.
-        - Se for EBITDA (Não-Mercado), explique que isso impacta a quantidade e não o preço unitário (Item 19).
-        - Cite o CPC 10.
+        - Escreva um parágrafo técnico (4-8 linhas).
+
+         - SE for EBITDA/Lucro: Explique explicitamente que é uma "Condição de Não-Mercado" e que o modelo deve ignorar essa meta no cálculo do preço, ajustando apenas a quantidade esperada (Vesting).
+
+         - Cite os itens do CPC 10 (ex: "Conforme Item 19 do CPC 10...").
+
+        2. Em seguida, liste: Strike, Spot (se houver), preço do ativo  subjacente, Volatilidade implícita no texto,carência e vida de cada tranch Vida da Opção, indicador de performance de mercado e/ou não mercado se houver, .
+
+        3. Tratamento de Dividendos: Explique claramente se o yield deve ser considerado (q > 0) ou se há proteção de strike (q = 0).
+
+        4.  NÃO seja breve. Escreva um parágrafo detalhado (4 a 8 linhas).
+
+        5.  Cite explicitamente os termos do CPC 10 / IFRS 2.
+
+        6.  Justifique a escolha do modelo contrastando com as limitações dos outros.
+
+            - Ex: "O modelo Binomial é exigido conforme parágrafo B5 do CPC 10 pois captura o exercício antecipado (Opção Americana), algo que o Black-Scholes não faz..."
+
+            - Ex: "Devido à 'Condição de Mercado' (TSR), o CPC 10 exige modelo estocástico (Monte Carlo) para refletir a volatilidade conjunta..."
 
         ### 3. CONTEXTO DO CONTRATO
 
