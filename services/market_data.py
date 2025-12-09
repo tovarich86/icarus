@@ -128,7 +128,7 @@ class MarketDataService:
                     # === CORREÇÃO APLICADA (REGRA DETERMINÍSTICA) ===
                     # Padrão Brasileiro c/ 4 casas (ex: 1075 representa 10.75%)
                     # Converte para decimal unitário: 1075 / 10000 = 0.1075
-                    val = float(taxa_raw) / 10000.0
+                    val = float(taxa_raw) / 100000.0
                     
                     dias_corridos = (dt_venc - reference_date).days
                     if dias_corridos > 0:
