@@ -78,9 +78,19 @@ class DocumentService:
             return None
             
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        generation_config = {
+            "temperature": 0.1, # Reduz criatividade desnecessária, foca em precisão
+            "response_mime_type": "application/json" # Força saída JSON nativa
+        }
+
+        model = genai.GenerativeModel(
+            model_name='gemini-2.5-flash', # Use explicitamente o 1.5 Flash para velocidade máxima
+            generation_config=generation_config
+        )
         
         # Prompt Reforçado para evitar erros de sintaxe JSON
+        # 1. A saída deve ser APENAS um JSON válido.
+        # 2. NÃO use quebras de linha reais dentro das strings. Use o caractere de escape \\n literal.
         prompt = f"""
         Você é um Especialista em IFRS 2 (CPC 10). Analise o contrato e gere um JSON para precificação.
         REGRAS DE EXTRAÇÃO DE TEXTO ("valuation_params"):
@@ -89,10 +99,9 @@ class DocumentService:
         3. Tratamento de Dividendos: Explique claramente se o yield deve ser considerado (q > 0) ou se há proteção de strike (q = 0).
 
         ATENÇÃO CRÍTICA À FORMATAÇÃO JSON:
-        1. A saída deve ser APENAS um JSON válido.
-        2. NÃO use quebras de linha reais dentro das strings. Use o caractere de escape \\n literal.
-        3. Se houver aspas duplas " dentro de um texto, elas DEVEM ser escapadas como \\".
-        4. Verifique se todas as chaves e valores estão fechados corretamente.
+        
+        1. Se houver aspas duplas " dentro de um texto, elas DEVEM ser escapadas como \\".
+        2. Verifique se todas as chaves e valores estão fechados corretamente.
 
         DIRETRIZES TÉCNICAS:
         - Classificação: EQUITY_SETTLED (Ações) vs CASH_SETTLED (Caixa/Phantom).
@@ -100,7 +109,7 @@ class DocumentService:
         - Prazos: Diferencie Vesting (Carência) de Expiration (Vencimento total).
 
         TEXTO DO CONTRATO:
-        {text[:80000]}
+        {text[:45000]}
 
         SAÍDA JSON (ESTRITA):
         {{
