@@ -46,7 +46,7 @@ class IFRS2App:
                 self._handle_analysis(uploaded_files, manual_text, gemini_key)
             
             st.divider()
-            st.caption("v.Release 1.6 - DI Fix & UI Clean")
+            st.caption("v.Release 1.7 - UX/UI Boost")
 
         if st.session_state['analysis_result']:
             self._render_dashboard(
@@ -114,13 +114,22 @@ class IFRS2App:
 
         st.subheader("3. Premissas de Mercado")
         c1, c2, c3, c4 = st.columns(4)
-        S = c1.number_input("Spot (R$)", 0.0, 10000.0, 50.0)
-        K = c2.number_input("Strike (R$)", 0.0, 10000.0, analysis.strike_price)
-        q = c3.number_input("Div Yield (%)", 0.0, 100.0, 0.0) / 100
+        
+        # Tooltips adicionados para clareza
+        S = c1.number_input("Spot (R$)", 0.0, 10000.0, 50.0, help="Preço atual da ação-objeto (Data Base).")
+        K = c2.number_input("Strike (R$)", 0.0, 10000.0, analysis.strike_price, help="Preço de exercício da opção.")
+        q = c3.number_input("Div Yield (%)", 0.0, 100.0, 0.0, help="Expectativa de dividendos anuais (Dividend Yield).") / 100
         
         opts = [m for m in PricingModelType if m != PricingModelType.UNDEFINED]
         idx = opts.index(analysis.model_recommended) if analysis.model_recommended in opts else 0
-        active_model = c4.selectbox("Modelo", opts, index=idx)
+        
+        # Correção do Seletor: Mostra apenas o nome amigável (sem 'PricingModelType.')
+        active_model = c4.selectbox(
+            "Modelo de Precificação", 
+            opts, 
+            index=idx,
+            format_func=lambda x: x.value 
+        )
 
         st.divider()
 
@@ -143,28 +152,73 @@ class IFRS2App:
 
         for i, t in enumerate(tranches):
             with st.container(border=True):
-                st.markdown(f"**Tranche {i+1}**")
-                col_t, col_vol, col_rate = st.columns([1, 1, 1])
+                # Cabeçalho Limpo
+                st.markdown(f"##### 🔹 Tranche {i+1}")
                 
-                with col_t:
+                # --- LINHA 1: Tempo e Peso (Grid 4 colunas) ---
+                c_time1, c_time2, c_time3, c_time4 = st.columns(4)
+                
+                with c_time1:
                     def_exp = t.expiration_date if t.expiration_date else analysis.option_life_years
-                    t_exp = st.number_input(f"Vencimento (Anos)", value=float(def_exp), key=f"bi_t_{i}")
-                    t_vest = st.number_input(f"Vesting (Anos)", value=float(t.vesting_date), key=f"bi_v_{i}")
-                    t_prop = st.number_input(f"Peso (%)", value=float(t.proportion*100), key=f"bi_p_{i}")/100
-                
-                with col_vol:
+                    t_exp = st.number_input(
+                        f"Vencimento (Anos)", 
+                        value=float(def_exp), 
+                        key=f"bi_t_{i}",
+                        help="Prazo contratual total da opção (Life)."
+                    )
+                with c_time2:
+                    t_vest = st.number_input(
+                        f"Vesting (Anos)", 
+                        value=float(t.vesting_date), 
+                        key=f"bi_v_{i}",
+                        help="Período de carência até o direito se tornar exercível."
+                    )
+                with c_time3:
+                    t_prop = st.number_input(
+                        f"Peso (%)", 
+                        value=float(t.proportion*100), 
+                        key=f"bi_p_{i}",
+                        help="% do total de opções que pertence a esta tranche."
+                    )/100
+                with c_time4:
+                    t_lock = st.number_input(
+                        f"Lockup (Anos)", 
+                        value=float(analysis.lockup_years), 
+                        key=f"bi_lock_{i}",
+                        help="Tempo de restrição de venda da ação após o exercício."
+                    )
+
+                # --- LINHA 2: Mercado (Vol e Rate lado a lado) ---
+                c_mkt1, c_mkt2 = st.columns(2)
+                with c_mkt1:
                     self._render_vol_widget(i, "bi")
-                    
-                with col_rate:
+                with c_mkt2:
                     self._render_rate_widget_table(i, "bi", t_exp)
 
-                st.markdown("👇 *Parâmetros Avançados*")
-                c_adv1, c_adv2, c_adv3, c_adv4 = st.columns(4)
-                
-                t_turnover = c_adv1.number_input(f"Turnover", value=float(analysis.turnover_rate * 100), key=f"bi_turn_{i}") / 100
-                t_m = c_adv2.number_input(f"Múltiplo M", value=float(analysis.early_exercise_multiple), key=f"bi_m_{i}")
-                t_strike_corr = c_adv3.number_input(f"Corr. Strike (%)", value=4.5 if analysis.has_strike_correction else 0.0, key=f"bi_corr_{i}") / 100
-                t_lock = c_adv4.number_input(f"Lockup (Anos)", value=float(analysis.lockup_years), key=f"bi_lock_{i}")
+                # --- LINHA 3: Parâmetros Avançados (Expander) ---
+                with st.expander("⚙️ Parâmetros Avançados (Turnover & Barreiras)", expanded=False):
+                    c_adv1, c_adv2, c_adv3 = st.columns(3)
+                    
+                    t_turnover = c_adv1.number_input(
+                        f"Turnover Anual (%)", 
+                        value=float(analysis.turnover_rate * 100), 
+                        key=f"bi_turn_{i}",
+                        help="Taxa estimada de saída de funcionários antes do vesting."
+                    ) / 100
+                    
+                    t_m = c_adv2.number_input(
+                        f"Múltiplo M", 
+                        value=float(analysis.early_exercise_multiple), 
+                        key=f"bi_m_{i}",
+                        help="Gatilho de exercício antecipado (Ex: 2.0x o Strike)."
+                    )
+                    
+                    t_strike_corr = c_adv3.number_input(
+                        f"Corr. Strike (% a.a.)", 
+                        value=4.5 if analysis.has_strike_correction else 0.0, 
+                        key=f"bi_corr_{i}",
+                        help="Taxa de correção monetária do Strike (ex: IGPM)."
+                    ) / 100
 
                 key_vol = f"vol_val_bi_{i}"
                 key_rate = f"rate_val_bi_{i}"
@@ -178,7 +232,7 @@ class IFRS2App:
                     "StrikeCorr": t_strike_corr, "Lockup": t_lock
                 })
 
-        if st.button("Calcular (Binomial)", type="primary"):
+        if st.button("Calcular (Binomial)", type="primary", use_container_width=True):
             self._execute_calc(inputs, PricingModelType.BINOMIAL)
 
     def _render_monte_carlo_ai(self, S, K, q, analysis, text, api_key):
@@ -203,22 +257,30 @@ class IFRS2App:
                 self._run_custom_code(edited_code)
 
     def _render_graded(self, S, K, q, analysis):
+        st.info("ℹ️ Black-Scholes (Graded): Cálculo padrão para opções sem barreiras complexas.")
         self._manage_tranches_buttons()
         tranches = st.session_state['tranches']
         inputs = []
         
         for i, t in enumerate(tranches):
             with st.container(border=True):
-                st.markdown(f"**Tranche {i+1}**")
+                st.markdown(f"##### 🔹 Tranche {i+1}")
+                
+                # Linha 1: Dados da Opção
                 c1, c2, c3 = st.columns(3)
                 with c1:
                     def_exp = t.expiration_date if t.expiration_date else analysis.option_life_years
-                    t_exp = st.number_input(f"Vencimento (T)", value=float(def_exp), key=f"bs_t_{i}")
-                    t_prop = st.number_input(f"Peso (%)", value=float(t.proportion*100), key=f"bs_p_{i}")/100
-                    t_vest = st.number_input(f"Vesting (Ref)", value=float(t.vesting_date), key=f"bs_v_{i}")
+                    t_exp = st.number_input("Vencimento (Anos)", value=float(def_exp), key=f"bs_t_{i}", help="Prazo total (Life).")
                 with c2:
-                    self._render_vol_widget(i, "bs")
+                    t_prop = st.number_input("Peso (%)", value=float(t.proportion*100), key=f"bs_p_{i}", help="Peso desta tranche no total.")/100
                 with c3:
+                    t_vest = st.number_input("Vesting (Ref)", value=float(t.vesting_date), key=f"bs_v_{i}", help="Apenas informativo no BS.")
+                
+                # Linha 2: Mercado
+                c_mkt1, c_mkt2 = st.columns(2)
+                with c_mkt1:
+                    self._render_vol_widget(i, "bs")
+                with c_mkt2:
                     self._render_rate_widget_table(i, "bs", t_exp)
 
                 key_vol = f"vol_val_bs_{i}"
@@ -231,7 +293,7 @@ class IFRS2App:
                     "r": st.session_state.get(key_rate, 0.001075)
                 })
 
-        if st.button("Calcular (Black-Scholes)", type="primary"):
+        if st.button("Calcular (Black-Scholes)", type="primary", use_container_width=True):
             self._execute_calc(inputs, PricingModelType.BLACK_SCHOLES_GRADED)
 
     def _render_rsu(self, S, q, analysis):
@@ -241,11 +303,11 @@ class IFRS2App:
         
         for i, t in enumerate(tranches):
             with st.container(border=True):
-                st.markdown(f"**Tranche {i+1}**")
+                st.markdown(f"##### 🔹 Tranche {i+1}")
                 c1, c2, c3 = st.columns(3)
-                t_vest = c1.number_input(f"Pagamento (Anos)", value=float(t.vesting_date), key=f"rsu_v_{i}")
-                t_prop = c2.number_input(f"Peso (%)", value=float(t.proportion*100), key=f"rsu_p_{i}")/100
-                t_lock = c3.number_input(f"Lockup (Anos)", value=float(analysis.lockup_years), key=f"rsu_l_{i}")
+                t_vest = c1.number_input(f"Pagamento (Anos)", value=float(t.vesting_date), key=f"rsu_v_{i}", help="Data do recebimento da ação.")
+                t_prop = c2.number_input(f"Peso (%)", value=float(t.proportion*100), key=f"rsu_p_{i}", help="Proporção do total.")/100
+                t_lock = c3.number_input(f"Lockup (Anos)", value=float(analysis.lockup_years), key=f"rsu_l_{i}", help="Restrição de venda pós-vesting.")
                 
                 vol_val = 0.30
                 if t_lock > 0:
@@ -258,7 +320,7 @@ class IFRS2App:
                     "Prop": t_prop, "Lockup": t_lock, "Vol": vol_val
                 })
         
-        if st.button("Calcular (RSU)", type="primary"):
+        if st.button("Calcular (RSU)", type="primary", use_container_width=True):
             self._execute_calc(inputs, PricingModelType.RSU)
 
     def _render_vol_widget(self, i, prefix):
@@ -298,7 +360,7 @@ class IFRS2App:
 
     def _render_rate_widget_table(self, i, prefix, t_years):
         """
-        WIDGET DE DI OTIMIZADO: Callbacks Seguros + Tabela Limpa + Fix Warnings.
+        WIDGET DE DI OTIMIZADO: Callbacks Seguros + Tabela Limpa.
         """
         st.markdown("Taxa DI (%)")
         c_in, c_pop = st.columns([0.85, 0.15])
@@ -354,7 +416,7 @@ class IFRS2App:
                 st.caption("Taxas Disponíveis:")
                 st.dataframe(
                     df_show[[col_venc, 'Taxa (%)']].rename(columns={col_venc: 'Vencimento'}), 
-                    width='stretch',  # CORREÇÃO DO WARNING AQUI
+                    width=None, # Ajuste automático
                     height=200,
                     hide_index=True
                 )
@@ -377,7 +439,7 @@ class IFRS2App:
                     label_visibility="collapsed"
                 )
                 
-                # CALLBACK SEGURO (Atualiza decimal e visual)
+                # CALLBACK SEGURO
                 def apply_callback(k_decimal, k_widget, taxa_decimal):
                     st.session_state[k_decimal] = taxa_decimal
                     st.session_state[k_widget] = taxa_decimal * 100.0
@@ -421,7 +483,7 @@ class IFRS2App:
             try:
                 # Inputs Básicos
                 raw_vol = item.get('Vol', 0.0)
-                vol_decimal = float(raw_vol) / 100.0 # Correção de Escala
+                vol_decimal = float(raw_vol) / 100.0 
                 
                 S = float(item['S'])
                 T = float(item['T'])
@@ -429,17 +491,15 @@ class IFRS2App:
                 
                 # Get Seguro para Inputs Opcionais
                 K = float(item.get('K', 0.0))
-                r = float(item.get('r', 0.0)) # Taxa Efetiva (ex: 0.1075)
+                r = float(item.get('r', 0.0))
                 
                 vesting = float(item.get('Vesting', 0.0))
                 turnover = float(item.get('Turnover', 0.0))
                 
-                # --- CORREÇÃO DO MÚLTIPLO M NA UI ---
+                # Trava de Segurança M
                 raw_m = float(item.get('M', 2.0))
-                # Trava de Segurança: Se usuário mandar 0 ou < 1, forçamos um valor que desativa a barreira
-                # Ou travamos em 1.0. O padrão de mercado é >= 2.0.
                 if raw_m < 1.0:
-                    mul_m = 1.0 # Mínimo Racional (Exercer assim que entrar no dinheiro)
+                    mul_m = 1.0
                 else:
                     mul_m = raw_m
 
@@ -470,7 +530,7 @@ class IFRS2App:
                     "Tranche": item['TrancheID'],
                     "FV Unit": fv,
                     "FV Ponderado": w_fv,
-                    "M Ajustado": mul_m # Log para conferência
+                    "M Ajustado": mul_m 
                 })
             except Exception as e:
                 st.error(f"Erro Tranche {idx+1}: {e}")
@@ -480,6 +540,7 @@ class IFRS2App:
         c1, c2 = st.columns([1,3])
         c1.metric("Fair Value Total", f"R$ {total_fv:,.2f}")
         c2.dataframe(pd.DataFrame(res_data))
+
     def _manage_tranches_buttons(self):
         c1, c2 = st.columns(2)
         if c1.button("➕ Adicionar Tranche"):
