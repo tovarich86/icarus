@@ -351,8 +351,17 @@ class IFRS2App:
                 res = st.session_state[k_res]
                 if "summary" in res:
                     summ = res['summary']
-                    opts = {f"EWMA: {summ['mean_ewma']*100:.1f}%": summ['mean_ewma']*100,
-                            f"Hist: {summ['mean_std']*100:.1f}%": summ['mean_std']*100}
+                    
+                    # --- ATUALIZAÇÃO AQUI ---
+                    opts = {
+                        f"EWMA: {summ['mean_ewma']*100:.1f}%": summ['mean_ewma']*100,
+                        f"Hist: {summ['mean_std']*100:.1f}%": summ['mean_std']*100
+                    }
+                    
+                    # Adiciona GARCH dinamicamente se foi calculado (> 0)
+                    if summ.get('mean_garch', 0) > 0:
+                        opts[f"GARCH: {summ['mean_garch']*100:.1f}%"] = summ['mean_garch']*100
+                    
                     sel = st.radio("Métrica", list(opts.keys()), key=f"rad_{prefix}_{i}")
                     
                     st.button("Aplicar", key=f"app_{prefix}_{i}", 
