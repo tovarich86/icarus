@@ -95,6 +95,21 @@ class DocumentService:
         prompt = f"""
         Você é um Especialista em IFRS 2 (CPC 10). Analise o contrato e gere um JSON para precificação.
         REGRAS DE EXTRAÇÃO DE TEXTO ("valuation_params"):
+              
+        1. "program_summary" (Para a Caixa Azul):
+           - Deve ser um resumo narrativo claro dos principais tópicos do plano.
+           - Foque em: O que é o plano? Quem recebe? Qual o gatilho principal?
+        
+        2. "valuation_params" (Para a Coluna Lateral):
+           - OBRIGATÓRIO: Use FORMATO DE LISTA (Markdown Bullet Points) para cada item.
+           - Pule uma linha entre cada bullet point para facilitar a leitura.
+           - Liste: Strike, Spot, Volatilidade, Carência (Vesting), Vida (Expiration), Dividendos.
+           - Exemplo de formato:
+             * **Strike:** R$ 10,00 fixo.
+             
+             * **Vesting:** 3 anos em cliff.
+             
+             * **Dividendos:** Não recebe durante a carência
         1. A PRIMEIRA LINHA de "valuation_params" DEVE SER OBRIGATORIAMENTE: "Modelo Recomendado: [Nome do Modelo], 
         2. Modelagem: Se houver possibilidade de exercício antecipado (Janela entre Vesting e Vencimento)superior a 6 meses, prefira 'Binomial' sobre 'Black-Scholes', assim como se houver ajuste do strike price.
         2. Em seguida, liste: Strike, Spot (se houver), preço do ativo  subjacente, Volatilidade implícita no texto,carência e vida de cada tranch Vida da Opção, indicador de performance de mercado e/ou não mercado se houver, .
