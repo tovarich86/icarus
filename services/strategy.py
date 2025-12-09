@@ -89,7 +89,7 @@ class ModelSelectorService:
         # Critérios para Binomial
         complex_features = (
             analysis.has_strike_correction or       # Strike indexado (IGPM, etc)
-            gap_exercicio > 2.0 or                  # Janela de exercício longa (Valor de tempo relevante)
+            gap_exercicio > 0.5 or                  # Janela de exercício longa (Valor de tempo relevante)
             analysis.lockup_years > 0               # Restrição de venda pós-exercício
         )
 
