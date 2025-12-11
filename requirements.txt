@@ -14,3 +14,5 @@ selenium
 beautifulsoup4
 scipy
 xlsxwriter
+docxtpl
+python-docx
