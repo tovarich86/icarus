@@ -112,6 +112,69 @@ class IFRS2App:
             except Exception as e:
                 st.error(f"Erro na geração: {e}")
 
+    def _render_report_interface(self):
+        st.header("Gerador de Laudo Contábil (CPC 10)")
+        
+        # Validação de segurança
+        if 'last_calc_results' not in st.session_state or not st.session_state['last_calc_results']:
+            st.warning("⚠️ Realize o cálculo na aba anterior primeiro para habilitar o laudo.")
+            return
+
+        with st.container(border=True):
+            st.subheader("1. Dados da Empresa e Programa")
+            c1, c2 = st.columns(2)
+            with c1:
+                emp_nome = st.text_input("Razão Social", "Empresa Exemplo S.A.")
+                emp_ticker = st.text_input("Ticker (B3)", "EXMP3")
+                emp_aberta = st.checkbox("Companhia Aberta?", True)
+            with c2:
+                prog_nome = st.text_input("Nome do Plano", "Plano de Stock Options 2024")
+                prog_data = st.date_input("Data de Outorga", date.today())
+                prog_qtd = st.number_input("Qtd. Beneficiários", 1, 1000, 5)
+
+        with st.container(border=True):
+            st.subheader("2. Premissas Contábeis")
+            c1, c2, c3 = st.columns(3)
+            turnover_contab = c1.number_input("Turnover Esperado (% a.a.)", 0.0, 50.0, 5.0) / 100
+            perf_nao_mercado = c2.checkbox("Metas Não-Mercado (EBITDA)?")
+            perc_atingimento = 100.0
+            if perf_nao_mercado:
+                perc_atingimento = c2.number_input("% Atingimento", 0.0, 200.0, 100.0)
+            tem_encargos = c3.checkbox("Incide Encargos Sociais?", False)
+
+        with st.container(border=True):
+            st.subheader("3. Responsável Técnico")
+            r1, r2, r3 = st.columns(3)
+            resp_nome = r1.text_input("Nome", "Responsável")
+            resp_cargo = r2.text_input("Cargo", "Consultor")
+            resp_email = r3.text_input("Email", "contato@empresa.com")
+
+        st.subheader("4. Geração")
+        uploaded_template = st.file_uploader("Template (.docx)", type="docx", key="tpl_up")
+        
+        if uploaded_template and st.button("📄 Gerar Laudo", type="primary"):
+            manual_inputs = {
+                "empresa": {"nome": emp_nome, "ticker": emp_ticker, "capital_aberto": emp_aberta},
+                "programa": {"nome": prog_nome, "data_outorga": prog_data, "qtd_beneficiarios": prog_qtd},
+                "responsavel": {"nome": resp_nome, "cargo": resp_cargo, "email": resp_email},
+                "contab": {"taxa_turnover": turnover_contab, "tem_metas_nao_mercado": perf_nao_mercado, 
+                           "percentual_atingimento": perc_atingimento, "tem_encargos": tem_encargos}
+            }
+            try:
+                # Usa os resultados salvos na sessão ('last_calc_results')
+                ctx = ReportService.generate_report_context(
+                    st.session_state['analysis_result'],
+                    st.session_state['tranches'],
+                    st.session_state['last_calc_results'],
+                    manual_inputs
+                )
+                file_bytes = ReportService.render_template(uploaded_template, ctx)
+                st.download_button("💾 Baixar Laudo", file_bytes, f"Laudo_{emp_nome}.docx", 
+                                   "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+                st.success("Laudo gerado com sucesso!")
+            except Exception as e:
+                st.error(f"Erro: {e}")
+
     def run(self) -> None:
         st.set_page_config(page_title="Icarus Valuation", layout="wide", page_icon="🛡️")
         st.title("🛡️ Icarus: Valuation IFRS 2 (Table View)")
@@ -143,14 +206,23 @@ class IFRS2App:
             st.divider()
             st.caption("v.Release 1.7 - UX/UI Boost")
 
-        if st.session_state['analysis_result']:
-            self._render_dashboard(
-                st.session_state['analysis_result'], 
-                st.session_state['full_context_text'], 
-                gemini_key
-            )
-        else:
-            self._render_empty_state()
+        # --- Crie as abas ---
+        tab_calc, tab_laudo = st.tabs(["🧮 1. Cálculo & Valuation", "📝 2. Gerador de Laudo"])
+
+        # --- Aba 1: Mantém sua lógica atual ---
+        with tab_calc:
+            if st.session_state['analysis_result']:
+                self._render_dashboard(
+                    st.session_state['analysis_result'], 
+                    st.session_state['full_context_text'], 
+                    gemini_key
+                )
+            else:
+                self._render_empty_state()
+
+        # --- Aba 2: Nova funcionalidade ---
+        with tab_laudo:
+            self._render_report_interface()
 
     def _update_widget_state(self, key_val: str, key_widget: str, value: float):
         st.session_state[key_val] = value
@@ -667,8 +739,8 @@ class IFRS2App:
             prog.progress((idx+1)/len(inputs))
 
         st.session_state['last_calc_results'] = res_data
-        st.success("✅ Cálculo realizado! Vá para a aba 'Gerador de Laudo' para preencher os dados cadastrais.")
-            
+        st.toast("Cálculo salvo! Acesse a aba 'Gerador de Laudo'.", icon="💾")
+        
         c1, c2 = st.columns([1,3])
         c1.metric("Fair Value Total", f"R$ {total_fv:,.2f}")
         c2.dataframe(pd.DataFrame(res_data))
