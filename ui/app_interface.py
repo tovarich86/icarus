@@ -35,45 +35,70 @@ class IFRS2App:
     def _render_report_interface(self):
         st.header("Gerador de Laudo Contábil (CPC 10)")
         
-        if 'last_calc_results' not in st.session_state:
-            st.warning("⚠️ Realize o cálculo na aba anterior primeiro.")
+        # Validação: Só permite gerar laudo se houver cálculo realizado
+        if not st.session_state.get('last_calc_results'):
+            st.warning("⚠️ Nenhum cálculo encontrado. Por favor, realize o valuation na aba 'Cálculo & Valuation' primeiro.")
             return
 
+        if ReportService is None:
+            st.error("Erro Crítico: O serviço 'ReportService' não foi carregado.")
+            return
+
+        # --- SEÇÃO 1: INPUTS DO USUÁRIO ---
         with st.container(border=True):
             st.subheader("1. Dados da Empresa e Programa")
             c1, c2 = st.columns(2)
             with c1:
-                emp_nome = st.text_input("Razão Social da Empresa", "Empresa Exemplo S.A.")
-                emp_ticker = st.text_input("Ticker (B3)", "EXMP3")
-                emp_aberta = st.checkbox("Companhia Aberta?", True)
+                emp_nome = st.text_input("Razão Social", "Minha Empresa S.A.", key="rep_emp_nome")
+                emp_ticker = st.text_input("Ticker (opcional)", "TICK3", key="rep_emp_ticker")
+                emp_aberta = st.checkbox("Capital Aberto?", value=True, key="rep_emp_aberta")
             with c2:
-                prog_nome = st.text_input("Nome do Plano", "Plano de Stock Options 2024")
-                prog_data = st.date_input("Data de Outorga", date.today())
-                prog_qtd = st.number_input("Qtd. Beneficiários", 1, 1000, 5)
+                prog_nome = st.text_input("Nome do Plano", "Plano de Opção de Compra 2024", key="rep_prog_nome")
+                prog_data = st.date_input("Data de Outorga", date.today(), key="rep_prog_data")
+                prog_qtd = st.number_input("Qtd. Beneficiários", 1, 10000, 10, key="rep_prog_qtd")
 
         with st.container(border=True):
-            st.subheader("2. Premissas Contábeis (Não-Mercado)")
-            c1, c2, c3 = st.columns(3)
-            turnover_contab = c1.number_input("Turnover Esperado (% a.a.)", 0.0, 50.0, 5.0, help="Para cálculo de quantidade vesting.") / 100
-            perf_nao_mercado = c2.checkbox("Tem Metas Operacionais (EBITDA/Lucro)?")
-            perc_atingimento = 100.0
-            if perf_nao_mercado:
-                perc_atingimento = c2.number_input("% Atingimento Esperado", 0.0, 200.0, 100.0)
-            
-            tem_encargos = c3.checkbox("Incide Encargos Sociais?", False, help="Se marcado, projeta INSS + FGTS.")
+            st.subheader("2. Premissas Contábeis e Responsável")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**Contabilidade**")
+                turnover_contab = st.number_input("Turnover Esperado (% a.a.)", 0.0, 50.0, 5.0, key="rep_turnover") / 100
+                tem_encargos = st.checkbox("Incide Encargos Sociais (INSS)?", False, key="rep_encargos")
+                perf_nao_mercado = st.checkbox("Possui Metas Não-Mercado (EBITDA)?", False, key="rep_metas")
+                perc_atingimento = 100.0
+                if perf_nao_mercado:
+                    perc_atingimento = st.number_input("% Atingimento Esperado", 0.0, 200.0, 100.0, key="rep_ating")
+            with c2:
+                st.markdown("**Responsável Técnico**")
+                resp_nome = st.text_input("Nome", "Consultor Responsável", key="rep_resp_nome")
+                resp_cargo = st.text_input("Cargo", "Especialista em Remuneração", key="rep_resp_cargo")
+                resp_email = st.text_input("Email", "contato@exemplo.com", key="rep_resp_email")
 
-        with st.container(border=True):
-            st.subheader("3. Responsável Técnico")
-            r1, r2, r3 = st.columns(3)
-            resp_nome = r1.text_input("Nome", "Responsável Técnico")
-            resp_cargo = r2.text_input("Cargo", "Consultor")
-            resp_email = r3.text_input("Email", "contato@empresa.com")
-
-        st.subheader("4. Geração")
-        uploaded_template = st.file_uploader("Template (.docx)", type="docx", key="tpl_up")
+        # --- SEÇÃO 2: GERAÇÃO AUTOMÁTICA (TEMPLATE HOSPEDADO) ---
+        st.subheader("3. Geração do Documento")
         
-        if uploaded_template and st.button("📄 Gerar Laudo"):
-            # Consolida Inputs
+        # Lógica para encontrar o template hospedado
+        import os
+        possible_paths = [
+            "TEMPLATE_FINAL_PADRAO.docx",             # Raiz
+            "templates/TEMPLATE_FINAL_PADRAO.docx",   # Pasta templates
+            "ui/TEMPLATE_FINAL_PADRAO.docx"           # Pasta ui
+        ]
+        
+        template_path = None
+        for p in possible_paths:
+            if os.path.exists(p):
+                template_path = p
+                break
+        
+        if not template_path:
+            st.error("❌ ERRO DE SISTEMA: O arquivo de template padrão ('TEMPLATE_FINAL_PADRAO.docx') não foi encontrado no servidor. Contate o administrador do repositório.")
+            return
+
+        st.info(f"✅ Template padrão carregado com sucesso.")
+
+        if st.button("📄 Gerar Laudo Oficial", type="primary"):
+            # Consolida todos os inputs manuais
             manual_inputs = {
                 "empresa": {"nome": emp_nome, "ticker": emp_ticker, "capital_aberto": emp_aberta},
                 "programa": {"nome": prog_nome, "data_outorga": prog_data, "qtd_beneficiarios": prog_qtd},
@@ -85,95 +110,31 @@ class IFRS2App:
                     "tem_encargos": tem_encargos
                 }
             }
-            
-            # Gera Contexto
+
             try:
-                ctx = ReportService.generate_report_context(
-                    st.session_state['analysis_result'],
-                    st.session_state['tranches'],
-                    st.session_state['last_calc_results'],
-                    manual_inputs
-                )
+                with st.spinner("Compilando dados e gerando documento..."):
+                    # Chama o serviço para mapear os dados
+                    context = ReportService.generate_report_context(
+                        st.session_state['analysis_result'],
+                        st.session_state['tranches'],
+                        st.session_state['last_calc_results'],
+                        manual_inputs
+                    )
+                    
+                    # Gera o binário do arquivo usando o PATH encontrado
+                    docx_bytes = ReportService.render_template(template_path, context)
                 
-                # Renderiza
-                file_bytes = ReportService.render_template(uploaded_template, ctx)
-                
+                # Botão de Download
                 st.download_button(
-                    label="💾 Baixar Laudo Preenchido",
-                    data=file_bytes,
-                    file_name=f"Laudo_{emp_nome}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    type="primary"
+                    label=f"💾 Baixar Laudo: {emp_nome}.docx",
+                    data=docx_bytes,
+                    file_name=f"Laudo_{emp_nome.replace(' ', '_')}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
+                st.success("Documento gerado! Clique no botão acima para salvar.")
                 
-                with st.expander("Ver JSON Gerado (Debug)"):
-                    st.json(ctx)
-
             except Exception as e:
-                st.error(f"Erro na geração: {e}")
-
-    def _render_report_interface(self):
-        st.header("Gerador de Laudo Contábil (CPC 10)")
-        
-        # Validação de segurança
-        if 'last_calc_results' not in st.session_state or not st.session_state['last_calc_results']:
-            st.warning("⚠️ Realize o cálculo na aba anterior primeiro para habilitar o laudo.")
-            return
-
-        with st.container(border=True):
-            st.subheader("1. Dados da Empresa e Programa")
-            c1, c2 = st.columns(2)
-            with c1:
-                emp_nome = st.text_input("Razão Social", "Empresa Exemplo S.A.")
-                emp_ticker = st.text_input("Ticker (B3)", "EXMP3")
-                emp_aberta = st.checkbox("Companhia Aberta?", True)
-            with c2:
-                prog_nome = st.text_input("Nome do Plano", "Plano de Stock Options 2024")
-                prog_data = st.date_input("Data de Outorga", date.today())
-                prog_qtd = st.number_input("Qtd. Beneficiários", 1, 1000, 5)
-
-        with st.container(border=True):
-            st.subheader("2. Premissas Contábeis")
-            c1, c2, c3 = st.columns(3)
-            turnover_contab = c1.number_input("Turnover Esperado (% a.a.)", 0.0, 50.0, 5.0) / 100
-            perf_nao_mercado = c2.checkbox("Metas Não-Mercado (EBITDA)?")
-            perc_atingimento = 100.0
-            if perf_nao_mercado:
-                perc_atingimento = c2.number_input("% Atingimento", 0.0, 200.0, 100.0)
-            tem_encargos = c3.checkbox("Incide Encargos Sociais?", False)
-
-        with st.container(border=True):
-            st.subheader("3. Responsável Técnico")
-            r1, r2, r3 = st.columns(3)
-            resp_nome = r1.text_input("Nome", "Responsável")
-            resp_cargo = r2.text_input("Cargo", "Consultor")
-            resp_email = r3.text_input("Email", "contato@empresa.com")
-
-        st.subheader("4. Geração")
-        uploaded_template = st.file_uploader("Template (.docx)", type="docx", key="tpl_up")
-        
-        if uploaded_template and st.button("📄 Gerar Laudo", type="primary"):
-            manual_inputs = {
-                "empresa": {"nome": emp_nome, "ticker": emp_ticker, "capital_aberto": emp_aberta},
-                "programa": {"nome": prog_nome, "data_outorga": prog_data, "qtd_beneficiarios": prog_qtd},
-                "responsavel": {"nome": resp_nome, "cargo": resp_cargo, "email": resp_email},
-                "contab": {"taxa_turnover": turnover_contab, "tem_metas_nao_mercado": perf_nao_mercado, 
-                           "percentual_atingimento": perc_atingimento, "tem_encargos": tem_encargos}
-            }
-            try:
-                # Usa os resultados salvos na sessão ('last_calc_results')
-                ctx = ReportService.generate_report_context(
-                    st.session_state['analysis_result'],
-                    st.session_state['tranches'],
-                    st.session_state['last_calc_results'],
-                    manual_inputs
-                )
-                file_bytes = ReportService.render_template(uploaded_template, ctx)
-                st.download_button("💾 Baixar Laudo", file_bytes, f"Laudo_{emp_nome}.docx", 
-                                   "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-                st.success("Laudo gerado com sucesso!")
-            except Exception as e:
-                st.error(f"Erro: {e}")
+                st.error(f"Erro ao processar o documento: {str(e)}")
 
     def run(self) -> None:
         st.set_page_config(page_title="Icarus Valuation", layout="wide", page_icon="🛡️")
