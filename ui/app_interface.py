@@ -570,6 +570,9 @@ class IFRS2App:
                 st.error(f"Erro Tranche {idx+1}: {e}")
                 
             prog.progress((idx+1)/len(inputs))
+
+        st.session_state['last_calc_results'] = res_data
+        st.success("✅ Cálculo realizado! Vá para a aba 'Gerador de Laudo' para preencher os dados cadastrais.")
             
         c1, c2 = st.columns([1,3])
         c1.metric("Fair Value Total", f"R$ {total_fv:,.2f}")
