@@ -5,6 +5,7 @@ import io
 import sys
 from datetime import date, timedelta
 from typing import List, Dict
+from services.report_service import ReportService
 
 from core.domain import PlanAnalysisResult, Tranche, PricingModelType, SettlementType
 from engines.financial import FinancialMath
@@ -16,6 +17,100 @@ class IFRS2App:
     """
     Aplicação principal do Icarus.
     """
+    def run(self) -> None:
+        st.set_page_config(page_title="Icarus Valuation", layout="wide", page_icon="🛡️")
+        
+        # --- NOVO: Estrutura de Abas ---
+        tab_calc, tab_laudo = st.tabs(["🧮 1. Cálculo & Valuation", "📝 2. Gerador de Laudo"])
+        
+        with tab_calc:
+            # Aqui vai todo o conteúdo original que estava no run()
+            # Copie e cole a lógica de Header, Sidebar, if session_state...
+            self._render_main_valuation_interface() # (Exemplo: refatore o conteúdo antigo para um método auxiliar ou mantenha aqui)
+
+        with tab_laudo:
+            self._render_report_interface()
+
+    # Crie este novo método para desenhar a tela de preenchimento
+    def _render_report_interface(self):
+        st.header("Gerador de Laudo Contábil (CPC 10)")
+        
+        if 'last_calc_results' not in st.session_state:
+            st.warning("⚠️ Realize o cálculo na aba anterior primeiro.")
+            return
+
+        with st.container(border=True):
+            st.subheader("1. Dados da Empresa e Programa")
+            c1, c2 = st.columns(2)
+            with c1:
+                emp_nome = st.text_input("Razão Social da Empresa", "Empresa Exemplo S.A.")
+                emp_ticker = st.text_input("Ticker (B3)", "EXMP3")
+                emp_aberta = st.checkbox("Companhia Aberta?", True)
+            with c2:
+                prog_nome = st.text_input("Nome do Plano", "Plano de Stock Options 2024")
+                prog_data = st.date_input("Data de Outorga", date.today())
+                prog_qtd = st.number_input("Qtd. Beneficiários", 1, 1000, 5)
+
+        with st.container(border=True):
+            st.subheader("2. Premissas Contábeis (Não-Mercado)")
+            c1, c2, c3 = st.columns(3)
+            turnover_contab = c1.number_input("Turnover Esperado (% a.a.)", 0.0, 50.0, 5.0, help="Para cálculo de quantidade vesting.") / 100
+            perf_nao_mercado = c2.checkbox("Tem Metas Operacionais (EBITDA/Lucro)?")
+            perc_atingimento = 100.0
+            if perf_nao_mercado:
+                perc_atingimento = c2.number_input("% Atingimento Esperado", 0.0, 200.0, 100.0)
+            
+            tem_encargos = c3.checkbox("Incide Encargos Sociais?", False, help="Se marcado, projeta INSS + FGTS.")
+
+        with st.container(border=True):
+            st.subheader("3. Responsável Técnico")
+            r1, r2, r3 = st.columns(3)
+            resp_nome = r1.text_input("Nome", "Responsável Técnico")
+            resp_cargo = r2.text_input("Cargo", "Consultor")
+            resp_email = r3.text_input("Email", "contato@empresa.com")
+
+        st.subheader("4. Geração")
+        uploaded_template = st.file_uploader("Template (.docx)", type="docx", key="tpl_up")
+        
+        if uploaded_template and st.button("📄 Gerar Laudo"):
+            # Consolida Inputs
+            manual_inputs = {
+                "empresa": {"nome": emp_nome, "ticker": emp_ticker, "capital_aberto": emp_aberta},
+                "programa": {"nome": prog_nome, "data_outorga": prog_data, "qtd_beneficiarios": prog_qtd},
+                "responsavel": {"nome": resp_nome, "cargo": resp_cargo, "email": resp_email},
+                "contab": {
+                    "taxa_turnover": turnover_contab,
+                    "tem_metas_nao_mercado": perf_nao_mercado,
+                    "percentual_atingimento": perc_atingimento,
+                    "tem_encargos": tem_encargos
+                }
+            }
+            
+            # Gera Contexto
+            try:
+                ctx = ReportService.generate_report_context(
+                    st.session_state['analysis_result'],
+                    st.session_state['tranches'],
+                    st.session_state['last_calc_results'],
+                    manual_inputs
+                )
+                
+                # Renderiza
+                file_bytes = ReportService.render_template(uploaded_template, ctx)
+                
+                st.download_button(
+                    label="💾 Baixar Laudo Preenchido",
+                    data=file_bytes,
+                    file_name=f"Laudo_{emp_nome}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    type="primary"
+                )
+                
+                with st.expander("Ver JSON Gerado (Debug)"):
+                    st.json(ctx)
+
+            except Exception as e:
+                st.error(f"Erro na geração: {e}")
 
     def run(self) -> None:
         st.set_page_config(page_title="Icarus Valuation", layout="wide", page_icon="🛡️")
