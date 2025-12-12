@@ -209,6 +209,11 @@ def _render_robust_vol_widget(i, key_val):
                     f"EWMA (Exponencial): {summ['mean_ewma']*100:.2f}%": summ['mean_ewma']*100,
                     f"Histórica (Std): {summ['mean_std']*100:.2f}%": summ['mean_std']*100
                 }
+                if summ.get('mean_garch', 0) > 0:
+                    opts[f"GARCH (Preditiva): {summ['mean_garch']*100:.2f}%"] = summ['mean_garch']*100
+                # -----------------------------------------------
+
+                sel_label = st.radio("Selecione a Métrica:", list(opts.keys()), key=f"rad_vol_{i}")
                 sel_label = st.radio("Selecione a Métrica:", list(opts.keys()), key=f"rad_vol_{i}")
                 
                 # CORREÇÃO AQUI: Passamos key_widget para atualizar a caixa de texto
