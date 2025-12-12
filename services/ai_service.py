@@ -86,8 +86,7 @@ class DocumentService:
         main_type = plan_types[0] if plan_types else "Não Classificado"
         has_market = facts.get("has_tsr") or facts.get("has_market_condition")
         
-        # Criação segura com Pydantic
-        # Nota: Pydantic exige campos obrigatórios, então preenchemos com defaults sensatos
+        # Criação segura com Pydantic (Arguments Nomeados OBRIGATÓRIOS)
         return PlanAnalysisResult(
             summary=f"Análise via Regras: Detectado {main_type}.",
             program_summary=f"Plano identificado por palavras-chave como {main_type}.",
@@ -183,7 +182,7 @@ class DocumentService:
             return result
             
         except Exception as e:
-            st.error(f"Erro na análise de IA: {str(e)}")
+            # st.error(f"Erro na análise de IA: {str(e)}") # Comentado para não sujar UI
             # Fallback para regras se a IA falhar
             if rule_context:
                 return DocumentService._convert_rules_to_domain(rule_context)
