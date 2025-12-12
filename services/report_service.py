@@ -53,16 +53,15 @@ class ReportService:
     @staticmethod
     def generate_report_context(analysis_result, tranches, calc_results, manual_inputs) -> dict:
         
-        # Recupera dicionários
         emp_info = manual_inputs.get('empresa', {})
         prog_info = manual_inputs.get('programa', {})
         resp_info = manual_inputs.get('responsavel', {})
         contab_info = manual_inputs.get('contab', {})
-        extra_info = manual_inputs.get('calculo_extra', {}) # NOVO
+        extra_info = manual_inputs.get('calculo_extra', {})
 
         data_outorga = prog_info.get("data_outorga", date.today())
         
-        # Mapeamento do Contexto
+        # Mapeamento Completo
         context = {
             "empresa": {
                 "nome": emp_info.get("nome", "EMPRESA N/A"),
@@ -72,14 +71,12 @@ class ReportService:
             "programa": {
                 "nome": prog_info.get("nome", "Plano de Incentivo"),
                 "tipo_descritivo": "Plano Baseado em Ações",
-                # AQUI: Usa o input da tela
-                "tipo_detalhado": prog_info.get("tipo_detalhado", "Plano de Opção de Compra"), 
+                "tipo_detalhado": prog_info.get("tipo_detalhado", "Plano de Opção de Compra"),
                 "qtd_beneficiarios": prog_info.get("qtd_beneficiarios", 1),
                 "data_outorga": ReportService._format_date(data_outorga),
                 "forma_liquidacao": prog_info.get("forma_liquidacao", "CAIXA"),
                 "metodologia": prog_info.get("metodologia", "BLACK_SCHOLES"),
             },
-            # ... (seção laudo, responsavel, regras mantida igual) ...
             "laudo": {
                 "data_extenso": ReportService._get_data_extenso(date.today()),
                 "arquivo_excel": "Anexo I - Memória de Cálculo.xlsx"
@@ -91,27 +88,25 @@ class ReportService:
                 "texto_performance": "condições de mercado (TSR)" if analysis_result.has_market_condition else "tempo de serviço",
                 "tem_lockup": analysis_result.lockup_years > 0,
                 "prazo_lockup": f"{analysis_result.lockup_years} anos",
-                # AQUI: Performance não-mercado (meta operacional) não estava sendo passada no previous step corretamente
-                "tem_performance_nao_mercado": contab_info.get("tem_metas_nao_mercado", False) 
+                "tem_performance_nao_mercado": False 
             },
             "calculo": {
                 "data_base": ReportService._format_date(data_outorga),
                 "valor_ativo_base": ReportService._format_currency(calc_results[0].get('S', 0) if calc_results else 0),
-                
-                # AQUI: Bolsa ou Método Privado Variável
                 "bolsa": emp_info.get("bolsa_nome", "B3 S.A.") if emp_info.get("capital_aberto") else "N/A",
                 "metodo_precificacao_privado": extra_info.get("metodo_privado", "Avaliação Interna"),
                 
-                "tem_correcao_strike": analysis_result.has_strike_correction,
-                # AQUI: Índice Variável
-                "indice_correcao": extra_info.get("indice_correcao_nome", "IGPM/IPCA"),
+                # TAGS CRÍTICAS PARA LÓGICA DE TEXTO
+                "moeda": extra_info.get("moeda_selecionada", "BRL"), # Controla DI vs T-Bond
+                "cenario_dividendos": extra_info.get("cenario_dividendos", "ZERO"), # Controla texto de dividendos
                 
+                "tem_correcao_strike": analysis_result.has_strike_correction,
+                "indice_correcao": extra_info.get("indice_correcao_nome", "IGPM/IPCA"),
                 "modelo_precificacao": prog_info.get("metodologia", "BLACK_SCHOLES"),
                 "multiplo_exercicio": analysis_result.early_exercise_multiple,
                 "taxa_turnover_pos": f"{analysis_result.turnover_rate*100:.1f}%",
                 "dividend_yield": ReportService._format_percent(calc_results[0].get('q', 0)) if calc_results else "0,0%"
             },
-            # ... (restante igual: contab, tabelas) ...
             "contab": {
                  "taxa_turnover": f"{contab_info.get('taxa_turnover', 0)*100:.1f}%",
                  "tem_encargos": contab_info.get("tem_encargos", False)
@@ -122,6 +117,62 @@ class ReportService:
                 "encargos": [], "projecao_despesas": []
             }
         }
+        
+        # Loop de Tabelas (Corrigindo a Quantidade "N/D")
+        for i, row in enumerate(calc_results):
+            lote_nome = f"Lote {row.get('TrancheID', i+1)}"
+            
+            S = float(row.get('S', 0))
+            K = float(row.get('K', 0))
+            Vol = float(row.get('Vol', 0))
+            r = float(row.get('r', 0))
+            T = float(row.get('T', 0))
+            vesting_val = float(row.get('Vesting', 0))
+            
+            if vesting_val == 0 and i < len(tranches):
+                vesting_val = tranches[i].vesting_date
+                
+            dt_vesting = data_outorga + timedelta(days=int(vesting_val*365))
+            dt_venc = data_outorga + timedelta(days=int(T*365))
+
+            # AQUI: Usa a quantidade real em vez de N/D, distribuída ou total
+            qtd_total = prog_info.get("qtd_beneficiarios", 1)
+            # Se quiser dividir por lote, seria qtd_total / len(calc_results), mas vamos deixar total
+            qtd_display = str(qtd_total) 
+
+            context["tabelas"]["cronograma"].append({
+                "nome": context['programa']['nome'],
+                "numero": lote_nome,
+                "qtd": qtd_display,  # <--- CORRIGIDO
+                "data_outorga": ReportService._format_date(data_outorga),
+                "data_vesting": ReportService._format_date(dt_vesting),
+                "data_vencimento": ReportService._format_date(dt_venc)
+            })
+
+            # ... (Resto do loop de tabelas igual ao anterior) ...
+            # B. Tabela Strikes
+            context["tabelas"]["strikes"].append({
+                "lote": lote_nome,
+                "strike": ReportService._format_currency(K)
+            })
+            # C. Tabela Volatilidade
+            context["tabelas"]["volatilidade"].append({
+                "data_base": ReportService._format_date(data_outorga),
+                "vencimento": ReportService._format_date(dt_venc),
+                "valor": ReportService._format_percent(Vol)
+            })
+            # D. Tabela Taxa Livre de Risco
+            context["tabelas"]["taxa_livre_risco"].append({
+                "lote": lote_nome,
+                "vencimento": ReportService._format_date(dt_venc),
+                "taxa": ReportService._format_percent(r)
+            })
+            # E. Resultado Final
+            context["tabelas"]["resultados_fair_value"].append({
+                "lote": lote_nome,
+                "modelo": context['programa']['metodologia'],
+                "fv_final": ReportService._format_currency(row.get('FV Unit', 0))
+            })
 
         # --- 2. TABELAS DINÂMICAS ---
         # Itera sobre os resultados salvos (agora completos com S, K, Vol, r)
