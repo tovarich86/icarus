@@ -33,9 +33,9 @@ class IFRS2App:
 
     # Crie este novo método para desenhar a tela de preenchimento
     def _render_report_interface(self):
-        st.header("Gerador de Laudo Contábil (CPC 10)")
-        
-        # Validação: Só permite gerar laudo se houver cálculo realizado
+        st.header("Gerador de Laudo Contábil (CPC 10 / IFRS 2)")
+
+        # 1. Validação de Segurança
         if not st.session_state.get('last_calc_results'):
             st.warning("⚠️ Nenhum cálculo encontrado. Por favor, realize o valuation na aba 'Cálculo & Valuation' primeiro.")
             return
@@ -44,7 +44,7 @@ class IFRS2App:
             st.error("Erro Crítico: O serviço 'ReportService' não foi carregado.")
             return
 
-        # --- SEÇÃO 1: INPUTS DO USUÁRIO ---
+        # 2. Formulários de Input
         with st.container(border=True):
             st.subheader("1. Dados da Empresa e Programa")
             c1, c2 = st.columns(2)
@@ -74,67 +74,89 @@ class IFRS2App:
                 resp_cargo = st.text_input("Cargo", "Especialista em Remuneração", key="rep_resp_cargo")
                 resp_email = st.text_input("Email", "contato@exemplo.com", key="rep_resp_email")
 
-        # --- SEÇÃO 2: GERAÇÃO AUTOMÁTICA (TEMPLATE HOSPEDADO) ---
+        # 3. Geração do Documento
         st.subheader("3. Geração do Documento")
         
-        # Lógica para encontrar o template hospedado
+        # Localizador de Template (Hospedado)
         import os
         possible_paths = [
-            "TEMPLATE_FINAL_PADRAO.docx",             # Raiz
-            "templates/TEMPLATE_FINAL_PADRAO.docx",   # Pasta templates
-            "ui/TEMPLATE_FINAL_PADRAO.docx"           # Pasta ui
+            "TEMPLATE_FINAL_PADRAO.docx",
+            "templates/TEMPLATE_FINAL_PADRAO.docx",
+            "ui/TEMPLATE_FINAL_PADRAO.docx"
         ]
-        
-        template_path = None
-        for p in possible_paths:
-            if os.path.exists(p):
-                template_path = p
-                break
-        
-        if not template_path:
-            st.error("❌ ERRO DE SISTEMA: O arquivo de template padrão ('TEMPLATE_FINAL_PADRAO.docx') não foi encontrado no servidor. Contate o administrador do repositório.")
-            return
+        template_path = next((p for p in possible_paths if os.path.exists(p)), None)
 
-        st.info(f"✅ Template padrão carregado com sucesso.")
+        if not template_path:
+            st.error("❌ Template padrão ('TEMPLATE_FINAL_PADRAO.docx') não encontrado.")
+            return
+        
+        st.info(f"✅ Template carregado: {template_path}")
 
         if st.button("📄 Gerar Laudo Oficial", type="primary"):
-            # Consolida todos os inputs manuais
-            manual_inputs = {
-                "empresa": {"nome": emp_nome, "ticker": emp_ticker, "capital_aberto": emp_aberta},
-                "programa": {"nome": prog_nome, "data_outorga": prog_data, "qtd_beneficiarios": prog_qtd},
-                "responsavel": {"nome": resp_nome, "cargo": resp_cargo, "email": resp_email},
-                "contab": {
-                    "taxa_turnover": turnover_contab,
-                    "tem_metas_nao_mercado": perf_nao_mercado,
-                    "percentual_atingimento": perc_atingimento,
-                    "tem_encargos": tem_encargos
-                }
-            }
-
             try:
-                with st.spinner("Compilando dados e gerando documento..."):
-                    # Chama o serviço para mapear os dados
+                # --- LÓGICA DE CORREÇÃO PARA O WORD ---
+                
+                # 1. Definir a string exata que o Template Jinja2 espera para 'metodologia'
+                # Isso corrige o erro de textos jurídicos errados (ex: Binomial aparecendo para BS)
+                modelo_atual = st.session_state['analysis_result'].model_recommended
+                metodologia_str = "BLACK_SCHOLES" # Default seguro
+                
+                if modelo_atual == PricingModelType.BLACK_SCHOLES_GRADED:
+                    metodologia_str = "BLACK_SCHOLES"
+                elif modelo_atual == PricingModelType.BINOMIAL:
+                    metodologia_str = "BINOMIAL"
+                elif modelo_atual == PricingModelType.MONTE_CARLO:
+                    metodologia_str = "MONTE_CARLO"
+                elif modelo_atual == PricingModelType.RSU:
+                    metodologia_str = "COTACAO" # Geralmente templates tratam RSU como valor de cotação/intrínseco
+
+                # 2. Definir Liquidação para Contabilização (Passivo vs Equity)
+                # Se for Capital Aberto, assume Equity (Ações), senão Caixa (Passivo), 
+                # a menos que o valuation tenha detectado Cash-Settled explicitamente.
+                tipo_liq_analise = st.session_state['analysis_result'].settlement_type
+                if tipo_liq_analise == SettlementType.CASH_SETTLED:
+                    forma_liq_str = "CAIXA"
+                else:
+                    forma_liq_str = "ACOES" if emp_aberta else "CAIXA"
+
+                # 3. Consolidar Inputs
+                manual_inputs = {
+                    "empresa": {"nome": emp_nome, "ticker": emp_ticker, "capital_aberto": emp_aberta},
+                    "programa": {
+                        "nome": prog_nome, 
+                        "data_outorga": prog_data, 
+                        "qtd_beneficiarios": prog_qtd,
+                        "metodologia": metodologia_str,       # <--- CORREÇÃO APLICADA
+                        "forma_liquidacao": forma_liq_str     # <--- CORREÇÃO APLICADA
+                    },
+                    "responsavel": {"nome": resp_nome, "cargo": resp_cargo, "email": resp_email},
+                    "contab": {
+                        "taxa_turnover": turnover_contab,
+                        "tem_metas_nao_mercado": perf_nao_mercado,
+                        "percentual_atingimento": perc_atingimento,
+                        "tem_encargos": tem_encargos
+                    }
+                }
+
+                with st.spinner("Compilando dados..."):
                     context = ReportService.generate_report_context(
                         st.session_state['analysis_result'],
                         st.session_state['tranches'],
                         st.session_state['last_calc_results'],
                         manual_inputs
                     )
-                    
-                    # Gera o binário do arquivo usando o PATH encontrado
                     docx_bytes = ReportService.render_template(template_path, context)
                 
-                # Botão de Download
                 st.download_button(
                     label=f"💾 Baixar Laudo: {emp_nome}.docx",
                     data=docx_bytes,
                     file_name=f"Laudo_{emp_nome.replace(' ', '_')}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
-                st.success("Documento gerado! Clique no botão acima para salvar.")
+                st.success("Sucesso! O documento foi gerado com as correções lógicas aplicadas.")
                 
             except Exception as e:
-                st.error(f"Erro ao processar o documento: {str(e)}")
+                st.error(f"Erro ao gerar documento: {str(e)}")
 
     def run(self) -> None:
         st.set_page_config(page_title="Icarus Valuation", layout="wide", page_icon="🛡️")
