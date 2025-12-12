@@ -33,108 +33,114 @@ class IFRS2App:
 
     # Crie este novo método para desenhar a tela de preenchimento
     def _render_report_interface(self):
-        st.header("Gerador de Laudo Contábil (CPC 10 / IFRS 2)")
-
-        # 1. Validação de Segurança
+        st.header("Gerador de Laudo Contábil (CPC 10)")
+        
         if not st.session_state.get('last_calc_results'):
-            st.warning("⚠️ Nenhum cálculo encontrado. Por favor, realize o valuation na aba 'Cálculo & Valuation' primeiro.")
+            st.warning("⚠️ Nenhum cálculo encontrado. Realize o valuation na aba anterior.")
             return
 
         if ReportService is None:
-            st.error("Erro Crítico: O serviço 'ReportService' não foi carregado.")
+            st.error("Erro Crítico: Serviço de Relatório não carregado.")
             return
 
-        # 2. Formulários de Input
+        # --- 1. DADOS DA EMPRESA ---
         with st.container(border=True):
             st.subheader("1. Dados da Empresa e Programa")
             c1, c2 = st.columns(2)
             with c1:
                 emp_nome = st.text_input("Razão Social", "Minha Empresa S.A.", key="rep_emp_nome")
-                emp_ticker = st.text_input("Ticker (opcional)", "TICK3", key="rep_emp_ticker")
+                emp_ticker = st.text_input("Ticker", "TICK3", key="rep_emp_ticker")
                 emp_aberta = st.checkbox("Capital Aberto?", value=True, key="rep_emp_aberta")
+                
+                # NOVO: Flexibilidade para Bolsa e Método Privado
+                if emp_aberta:
+                    nome_bolsa = st.text_input("Bolsa de Valores", "B3 S.A. - Brasil, Bolsa, Balcão", key="rep_bolsa")
+                    metodo_privado = ""
+                else:
+                    nome_bolsa = ""
+                    metodo_privado = st.text_input("Metodologia de Preço da Ação (Privada)", 
+                                                 "Fluxo de Caixa Descontado (DCF)", 
+                                                 key="rep_metodo_priv",
+                                                 help="Ex: Múltiplos, Última Rodada, Valor Patrimonial.")
+
             with c2:
-                prog_nome = st.text_input("Nome do Plano", "Plano de Opção de Compra 2024", key="rep_prog_nome")
+                prog_nome = st.text_input("Nome do Plano", "Plano de Stock Options 2025", key="rep_prog_nome")
+                # NOVO: Tipo descritivo para o texto
+                tipo_detalhado = st.selectbox("Tipo do Plano (Texto)", 
+                                            ["Plano de Opção de Compra de Ações (Stock Options)", 
+                                             "Plano de Ações Restritas (Restricted Shares)",
+                                             "Plano de Ações por Performance (Performance Shares)",
+                                             "Plano de Phantom Options"],
+                                            key="rep_tipo_detalhado")
+                
                 prog_data = st.date_input("Data de Outorga", date.today(), key="rep_prog_data")
                 prog_qtd = st.number_input("Qtd. Beneficiários", 1, 10000, 10, key="rep_prog_qtd")
 
+        # --- 2. PREMISSAS TÉCNICAS E CONTÁBEIS ---
         with st.container(border=True):
-            st.subheader("2. Premissas Contábeis e Responsável")
+            st.subheader("2. Premissas Técnicas e Contábeis")
             c1, c2 = st.columns(2)
             with c1:
-                st.markdown("**Contabilidade**")
+                st.markdown("**Parâmetros Contábeis**")
                 turnover_contab = st.number_input("Turnover Esperado (% a.a.)", 0.0, 50.0, 5.0, key="rep_turnover") / 100
                 tem_encargos = st.checkbox("Incide Encargos Sociais (INSS)?", False, key="rep_encargos")
-                perf_nao_mercado = st.checkbox("Possui Metas Não-Mercado (EBITDA)?", False, key="rep_metas")
-                perc_atingimento = 100.0
-                if perf_nao_mercado:
-                    perc_atingimento = st.number_input("% Atingimento Esperado", 0.0, 200.0, 100.0, key="rep_ating")
+                
+                # NOVO: Controle Fino de Indexador
+                tem_correcao = st.session_state['analysis_result'].has_strike_correction
+                indice_texto = ""
+                if tem_correcao:
+                    indice_texto = st.text_input("Índice de Correção do Strike", "IGPM", key="rep_indice")
+
             with c2:
                 st.markdown("**Responsável Técnico**")
                 resp_nome = st.text_input("Nome", "Consultor Responsável", key="rep_resp_nome")
                 resp_cargo = st.text_input("Cargo", "Especialista em Remuneração", key="rep_resp_cargo")
                 resp_email = st.text_input("Email", "contato@exemplo.com", key="rep_resp_email")
 
-        # 3. Geração do Documento
+        # --- 3. GERAÇÃO ---
         st.subheader("3. Geração do Documento")
         
-        # Localizador de Template (Hospedado)
+        # Busca Template
         import os
-        possible_paths = [
-            "TEMPLATE_FINAL_PADRAO.docx",
-            "templates/TEMPLATE_FINAL_PADRAO.docx",
-            "ui/TEMPLATE_FINAL_PADRAO.docx"
-        ]
+        possible_paths = ["TEMPLATE_FINAL_PADRAO.docx", "templates/TEMPLATE_FINAL_PADRAO.docx", "ui/TEMPLATE_FINAL_PADRAO.docx"]
         template_path = next((p for p in possible_paths if os.path.exists(p)), None)
 
         if not template_path:
-            st.error("❌ Template padrão ('TEMPLATE_FINAL_PADRAO.docx') não encontrado.")
+            st.error("❌ Template padrão não encontrado.")
             return
         
         st.info(f"✅ Template carregado: {template_path}")
 
         if st.button("📄 Gerar Laudo Oficial", type="primary"):
             try:
-                # --- LÓGICA DE CORREÇÃO PARA O WORD ---
-                
-                # 1. Definir a string exata que o Template Jinja2 espera para 'metodologia'
-                # Isso corrige o erro de textos jurídicos errados (ex: Binomial aparecendo para BS)
+                # Lógica de Modelo e Liquidação (Mantida)
                 modelo_atual = st.session_state['analysis_result'].model_recommended
-                metodologia_str = "BLACK_SCHOLES" # Default seguro
-                
-                if modelo_atual == PricingModelType.BLACK_SCHOLES_GRADED:
-                    metodologia_str = "BLACK_SCHOLES"
-                elif modelo_atual == PricingModelType.BINOMIAL:
-                    metodologia_str = "BINOMIAL"
-                elif modelo_atual == PricingModelType.MONTE_CARLO:
-                    metodologia_str = "MONTE_CARLO"
-                elif modelo_atual == PricingModelType.RSU:
-                    metodologia_str = "COTACAO" # Geralmente templates tratam RSU como valor de cotação/intrínseco
+                metodologia_str = "BLACK_SCHOLES"
+                if modelo_atual == PricingModelType.BINOMIAL: metodologia_str = "BINOMIAL"
+                elif modelo_atual == PricingModelType.MONTE_CARLO: metodologia_str = "MONTE_CARLO"
+                elif modelo_atual == PricingModelType.RSU: metodologia_str = "COTACAO"
 
-                # 2. Definir Liquidação para Contabilização (Passivo vs Equity)
-                # Se for Capital Aberto, assume Equity (Ações), senão Caixa (Passivo), 
-                # a menos que o valuation tenha detectado Cash-Settled explicitamente.
                 tipo_liq_analise = st.session_state['analysis_result'].settlement_type
-                if tipo_liq_analise == SettlementType.CASH_SETTLED:
-                    forma_liq_str = "CAIXA"
-                else:
-                    forma_liq_str = "ACOES" if emp_aberta else "CAIXA"
+                forma_liq_str = "CAIXA" if tipo_liq_analise == SettlementType.CASH_SETTLED else ("ACOES" if emp_aberta else "CAIXA")
 
-                # 3. Consolidar Inputs
+                # Consolida Inputs (AGORA COM OS NOVOS CAMPOS)
                 manual_inputs = {
-                    "empresa": {"nome": emp_nome, "ticker": emp_ticker, "capital_aberto": emp_aberta},
+                    "empresa": {
+                        "nome": emp_nome, "ticker": emp_ticker, "capital_aberto": emp_aberta,
+                        "bolsa_nome": nome_bolsa # Novo
+                    },
                     "programa": {
-                        "nome": prog_nome, 
-                        "data_outorga": prog_data, 
-                        "qtd_beneficiarios": prog_qtd,
-                        "metodologia": metodologia_str,       # <--- CORREÇÃO APLICADA
-                        "forma_liquidacao": forma_liq_str     # <--- CORREÇÃO APLICADA
+                        "nome": prog_nome, "data_outorga": prog_data, "qtd_beneficiarios": prog_qtd,
+                        "metodologia": metodologia_str, "forma_liquidacao": forma_liq_str,
+                        "tipo_detalhado": tipo_detalhado # Novo
                     },
                     "responsavel": {"nome": resp_nome, "cargo": resp_cargo, "email": resp_email},
                     "contab": {
-                        "taxa_turnover": turnover_contab,
-                        "tem_metas_nao_mercado": perf_nao_mercado,
-                        "percentual_atingimento": perc_atingimento,
-                        "tem_encargos": tem_encargos
+                        "taxa_turnover": turnover_contab, "tem_encargos": tem_encargos
+                    },
+                    "calculo_extra": { # Novos campos de cálculo
+                        "metodo_privado": metodo_privado,
+                        "indice_correcao_nome": indice_texto
                     }
                 }
 
@@ -153,7 +159,7 @@ class IFRS2App:
                     file_name=f"Laudo_{emp_nome.replace(' ', '_')}.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 )
-                st.success("Sucesso! O documento foi gerado com as correções lógicas aplicadas.")
+                st.success("Laudo gerado com sucesso!")
                 
             except Exception as e:
                 st.error(f"Erro ao gerar documento: {str(e)}")
