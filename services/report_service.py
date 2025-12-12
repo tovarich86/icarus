@@ -51,24 +51,18 @@ class ReportService:
         return f"{dt.day} de {meses.get(dt.month, '')} de {dt.year}"
 
     @staticmethod
-    def generate_report_context(
-        analysis_result, 
-        tranches, 
-        calc_results, 
-        manual_inputs
-    ) -> dict:
-        """
-        Constrói o dicionário 'context' mesclando dados automáticos e manuais.
-        """
-        # Extrai dicionários de input manual (prioridade alta)
+    def generate_report_context(analysis_result, tranches, calc_results, manual_inputs) -> dict:
+        
+        # Recupera dicionários
         emp_info = manual_inputs.get('empresa', {})
         prog_info = manual_inputs.get('programa', {})
         resp_info = manual_inputs.get('responsavel', {})
         contab_info = manual_inputs.get('contab', {})
+        extra_info = manual_inputs.get('calculo_extra', {}) # NOVO
 
         data_outorga = prog_info.get("data_outorga", date.today())
         
-        # --- 1. ESTRUTURA BASE (Tags simples) ---
+        # Mapeamento do Contexto
         context = {
             "empresa": {
                 "nome": emp_info.get("nome", "EMPRESA N/A"),
@@ -78,54 +72,54 @@ class ReportService:
             "programa": {
                 "nome": prog_info.get("nome", "Plano de Incentivo"),
                 "tipo_descritivo": "Plano Baseado em Ações",
+                # AQUI: Usa o input da tela
+                "tipo_detalhado": prog_info.get("tipo_detalhado", "Plano de Opção de Compra"), 
                 "qtd_beneficiarios": prog_info.get("qtd_beneficiarios", 1),
                 "data_outorga": ReportService._format_date(data_outorga),
-                # AQUI: Usa o valor corrigido vindo do manual_inputs, não do analysis_result
-                "forma_liquidacao": prog_info.get("forma_liquidacao", "CAIXA"), 
+                "forma_liquidacao": prog_info.get("forma_liquidacao", "CAIXA"),
                 "metodologia": prog_info.get("metodologia", "BLACK_SCHOLES"),
             },
+            # ... (seção laudo, responsavel, regras mantida igual) ...
             "laudo": {
                 "data_extenso": ReportService._get_data_extenso(date.today()),
                 "arquivo_excel": "Anexo I - Memória de Cálculo.xlsx"
             },
-            "responsavel": {
-                "nome": resp_info.get("nome", ""),
-                "cargo": resp_info.get("cargo", ""),
-                "email": resp_info.get("email", "")
-            },
+            "responsavel": resp_info,
             "regras": {
                 "texto_vesting": f"escalonado em {len(tranches)} tranches",
                 "tem_performance": analysis_result.has_market_condition,
-                "texto_performance": "condições de mercado (TSR)" if analysis_result.has_market_condition else "apenas tempo de serviço",
+                "texto_performance": "condições de mercado (TSR)" if analysis_result.has_market_condition else "tempo de serviço",
                 "tem_lockup": analysis_result.lockup_years > 0,
                 "prazo_lockup": f"{analysis_result.lockup_years} anos",
-                "tem_performance_nao_mercado": contab_info.get("tem_metas_nao_mercado", False)
+                # AQUI: Performance não-mercado (meta operacional) não estava sendo passada no previous step corretamente
+                "tem_performance_nao_mercado": contab_info.get("tem_metas_nao_mercado", False) 
             },
             "calculo": {
                 "data_base": ReportService._format_date(data_outorga),
                 "valor_ativo_base": ReportService._format_currency(calc_results[0].get('S', 0) if calc_results else 0),
-                "bolsa": "B3 S.A." if emp_info.get("capital_aberto") else "Avaliação Interna",
+                
+                # AQUI: Bolsa ou Método Privado Variável
+                "bolsa": emp_info.get("bolsa_nome", "B3 S.A.") if emp_info.get("capital_aberto") else "N/A",
+                "metodo_precificacao_privado": extra_info.get("metodo_privado", "Avaliação Interna"),
+                
                 "tem_correcao_strike": analysis_result.has_strike_correction,
-                "indice_correcao": "IGPM/IPCA", 
-                "modelo_precificacao": prog_info.get("metodologia", "BLACK_SCHOLES"), # Reforça uso do input manual
+                # AQUI: Índice Variável
+                "indice_correcao": extra_info.get("indice_correcao_nome", "IGPM/IPCA"),
+                
+                "modelo_precificacao": prog_info.get("metodologia", "BLACK_SCHOLES"),
                 "multiplo_exercicio": analysis_result.early_exercise_multiple,
                 "taxa_turnover_pos": f"{analysis_result.turnover_rate*100:.1f}%",
                 "dividend_yield": ReportService._format_percent(calc_results[0].get('q', 0)) if calc_results else "0,0%"
             },
+            # ... (restante igual: contab, tabelas) ...
             "contab": {
-                "taxa_turnover": f"{contab_info.get('taxa_turnover', 0)*100:.1f}%",
-                "percentual_atingimento": f"{contab_info.get('percentual_atingimento', 100):.1f}%",
-                "tem_encargos": contab_info.get("tem_encargos", False)
+                 "taxa_turnover": f"{contab_info.get('taxa_turnover', 0)*100:.1f}%",
+                 "tem_encargos": contab_info.get("tem_encargos", False)
             },
-            # Inicializa listas vazias para segurança
             "tabelas": {
-                "cronograma": [],
-                "strikes": [],
-                "volatilidade": [],
-                "taxa_livre_risco": [],
-                "resultados_fair_value": [],
-                "encargos": [],
-                "projecao_despesas": []
+                "cronograma": [], "strikes": [], "volatilidade": [], 
+                "taxa_livre_risco": [], "resultados_fair_value": [], 
+                "encargos": [], "projecao_despesas": []
             }
         }
 
