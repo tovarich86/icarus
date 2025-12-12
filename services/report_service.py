@@ -45,6 +45,7 @@ class ReportService:
     @staticmethod
     def generate_report_context(analysis_result, tranches, calc_results, manual_inputs) -> dict:
         
+        # 1. Extração segura dos inputs
         emp_info = manual_inputs.get('empresa', {})
         prog_info = manual_inputs.get('programa', {})
         resp_info = manual_inputs.get('responsavel', {})
@@ -53,13 +54,13 @@ class ReportService:
 
         data_outorga = prog_info.get("data_outorga", date.today())
         
-        # --- 1. Lógica de Dividendos (Apenas Dados) ---
-        # Removemos os textos hardcoded. O Python só calcula o número e repassa a flag.
+        # 2. Lógica de Dividendos (Apenas Dados para o Template)
+        # O template Word decide o texto via {% if %}, nós só mandamos o valor e o cenário.
         cenario_div = extra_info.get("cenario_dividendos", "ZERO")
         div_yield_val = calc_results[0].get('q', 0) if calc_results else 0.0
         div_fmt = ReportService._format_percent(div_yield_val)
 
-        # --- 2. Inferência de Tipos ---
+        # 3. Inferência de Tipos (Para ocultar/exibir seções)
         metodologia = prog_info.get("metodologia", "BLACK_SCHOLES")
         tipo_detalhado = prog_info.get("tipo_detalhado", "")
         
@@ -67,10 +68,31 @@ class ReportService:
         is_performance = "Performance" in tipo_detalhado or analysis_result.has_market_condition
         is_stock_option = not is_rsu and not is_performance 
 
-        # --- 3. Performance de Não-Mercado ---
+        # 4. Performance de Não-Mercado (KPIs)
         tem_nao_mercado = contab_info.get("tem_performance_nao_mercado", False)
         perc_atingimento = contab_info.get("percentual_atingimento", 1.0)
 
+        # 5. Geração de Textos Auxiliares (CRÍTICO: Preenche as lacunas do Template)
+        # Sem isso, o laudo fica com espaços em branco no meio das frases.
+        
+        # Variáveis: descricao_performance, tipo_condicao, conclusao_calculo_fv
+        if is_performance:
+            descricao_perf = "condições de mercado (ex: TSR Relativo)"
+            tipo_cond = "de mercado"
+            conclusao_fv = "seus efeitos foram incorporados ao valor justo através do modelo de precificação (Monte Carlo)"
+        elif tem_nao_mercado:
+            descricao_perf = "metas operacionais internas (ex: EBITDA, Lucro)"
+            tipo_cond = "não de mercado"
+            conclusao_fv = "tais condições não afetam o valor justo unitário, apenas a estimativa de quantidade (vesting)"
+        else:
+            descricao_perf = "apenas tempo de serviço"
+            tipo_cond = "de serviço"
+            conclusao_fv = "não há condições de performance aplicáveis ao cálculo"
+
+        # Variável: programa.tipo (Usada na linha 263 do Template)
+        tipo_generico = "STOCK_OPTIONS" if is_stock_option else "OUTROS"
+
+        # 6. Montagem do Contexto
         context = {
             "empresa": {
                 "nome": emp_info.get("nome", "EMPRESA N/A"),
@@ -79,6 +101,7 @@ class ReportService:
             },
             "programa": {
                 "nome": prog_info.get("nome", "Plano de Incentivo"),
+                "tipo": tipo_generico, # Necessário para o IF do Stock Options no Word
                 "tipo_detalhado": tipo_detalhado,
                 "qtd_beneficiarios": prog_info.get("qtd_beneficiarios", 1),
                 "data_outorga": ReportService._format_date(data_outorga),
@@ -96,9 +119,18 @@ class ReportService:
                 "tem_performance_nao_mercado": tem_nao_mercado,
                 "tem_lockup": analysis_result.lockup_years > 0,
                 "prazo_lockup": f"{analysis_result.lockup_years} anos",
+                
+                # Flags
                 "is_stock_option": is_stock_option,
                 "is_rsu": is_rsu,
-                "is_performance": is_performance
+                "is_performance": is_performance,
+                
+                # Textos Auxiliares Restaurados
+                "descricao_performance": descricao_perf,
+                "tipo_condicao": tipo_cond,
+                "conclusao_calculo_fv": conclusao_fv,
+                "escolha_participante": False,
+                "texto_performance": descricao_perf 
             },
             "calculo": {
                 "data_base": ReportService._format_date(data_outorga),
@@ -107,7 +139,7 @@ class ReportService:
                 "metodo_precificacao_privado": extra_info.get("metodo_privado", "Avaliação Interna"),
                 "moeda": extra_info.get("moeda_selecionada", "BRL"),
                 
-                # AQUI: Enviamos apenas as variáveis que o Template usa no IF/ELSE
+                # Apenas dados para o Template resolver o texto
                 "cenario_dividendos": cenario_div, 
                 "dividend_yield": div_fmt,
                 
@@ -115,7 +147,13 @@ class ReportService:
                 "indice_correcao": extra_info.get("indice_correcao_nome", "IGPM/IPCA"),
                 "modelo_precificacao": metodologia,
                 "multiplo_exercicio": analysis_result.early_exercise_multiple,
-                "taxa_turnover_pos": f"{analysis_result.turnover_rate*100:.1f}%"
+                "taxa_turnover_pos": f"{analysis_result.turnover_rate*100:.1f}%",
+                
+                # Defaults de segurança
+                "tem_correlacao": False,
+                "qtd_simulacoes": "100.000",
+                "analise_instrumento_composto": "não se aplica",
+                "conclusao_reconhecimento": "como liquidado em instrumentos patrimoniais (Equity)" if prog_info.get("forma_liquidacao") == "ACOES" else "como passivo (Liability)"
             },
             "contab": {
                  "taxa_turnover": f"{contab_info.get('taxa_turnover', 0)*100:.1f}%",
@@ -129,9 +167,10 @@ class ReportService:
             }
         }
         
-        # --- Preenchimento das Tabelas ---
+        # 7. Preenchimento das Tabelas
         for i, row in enumerate(calc_results):
             lote_nome = f"Lote {row.get('TrancheID', i+1)}"
+            
             S = float(row.get('S', 0))
             K = float(row.get('K', 0))
             Vol = float(row.get('Vol', 0))
@@ -146,6 +185,7 @@ class ReportService:
             dt_venc = data_outorga + timedelta(days=int(T*365))
 
             qtd_total = prog_info.get("qtd_beneficiarios", 1)
+            # Aplica ajuste de KPI na quantidade
             qtd_ajustada = int(qtd_total * perc_atingimento) if tem_nao_mercado else qtd_total
 
             context["tabelas"]["cronograma"].append({
@@ -180,6 +220,7 @@ class ReportService:
                 "fv_final": ReportService._format_currency(row.get('FV Unit', 0))
             })
 
+        # 8. Encargos e Projeção
         if context['contab']['tem_encargos']:
             context["tabelas"]["encargos"].append({"nome": "INSS Patronal + RAT + Terceiros", "valor": "28,0%"})
             context["tabelas"]["encargos"].append({"nome": "FGTS", "valor": "8,0%"})
