@@ -6,28 +6,7 @@ qual motor matemático é o mais adequado, considerando agora as nuances de
 Contabilidade (Equity vs Liability) e a estrutura temporal (Vesting vs Life).
 """
 
-from core.domain import PlanAnalysisResult, PricingModelType, SettlementType
 
-class ModelSelectorService:
-    """
-    Serviço responsável por auditar as características do plano e definir o modelo de precificação.
-    """
-
-    @staticmethod
-    """
-Serviço de Estratégia e Seleção de Modelos.
-
-Este módulo contém a lógica de negócios ("Regras do Jogo") para determinar
-qual motor matemático é o mais adequado, considerando agora as nuances de
-Contabilidade (Equity vs Liability) e a estrutura temporal (Vesting vs Life).
-"""
-
-"""
-Serviço de Estratégia e Seleção de Modelos.
-
-Este módulo contém a lógica de negócios ("Regras do Jogo") para determinar
-qual motor matemático é o mais adequado, considerando agora as nuances de
-Contabilidade (Equity vs Liability) e a estrutura temporal (Vesting vs Life).
 """
 
 from core.domain import PlanAnalysisResult, PricingModelType, SettlementType
