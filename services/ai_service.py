@@ -82,51 +82,57 @@ class DocumentService:
     @staticmethod
     def _convert_rules_to_domain(rule_data: dict) -> PlanAnalysisResult:
         """
-        Converte a saída do RuleBasedExtractor diretamente para o objeto de domínio.
-        Usado quando a IA está desligada ou falha.
+        Converte regras em objeto de domínio com FORMATAÇÃO VISUAL (Markdown).
         """
         facts = rule_data.get("extracted_facts", {})
         plan_types = rule_data.get("detected_plan_types", [])
-        topic_matches = rule_data.get("topic_matches", {})
         
-        # Lógica Determinística para Defaults
-        main_type = plan_types[0] if plan_types else "Plano Não Classificado"
+        # 1. Definição de Ícones e Textos
+        main_type = plan_types[0] if plan_types else "Não Classificado"
+        has_market = facts.get("has_tsr") or facts.get("has_market_condition")
+        has_malus = facts.get("has_malus_clawback")
         
-        # Inferência de Liquidação
-        settlement = SettlementType.EQUITY_SETTLED
-        if any(term in main_type for term in ["Phantom", "SAR", "Bonus", "Financeira"]):
-            settlement = SettlementType.CASH_SETTLED
+        # 2. Construção do Texto Elegante (Markdown)
+        # Use \n para quebra de linha e * para bullet points
+        valuation_params_formatted = f"""
+        **Parâmetros Extraídos (Regras):**
         
-        # Inferência de Modelo Baseada em Fatos
-        model = PricingModelType.BLACK_SCHOLES_GRADED
-        if facts.get("has_tsr") or facts.get("has_market_condition"):
-            model = PricingModelType.MONTE_CARLO
-        elif any(term in main_type for term in ["Restricted", "RSU", "Ações Restritas"]):
-            model = PricingModelType.RSU
+        * **🎯 Tipo de Plano:** {main_type}
         
-        # Criação de Tranches Simplificada
-        vesting_avg = facts.get("vesting_period", 3.0)
-        tranches = [
-            Tranche(vesting_date=vesting_avg, proportion=1.0, expiration_date=10.0)
-        ]
+        * **⏳ Vesting (Carência):** {facts.get('vesting_period', 3.0):.1f} anos
+          *(Tempo médio ponderado estimado)*
+          
+        * **🔒 Lock-up:** {facts.get('lockup_years', 0.0):.1f} anos
         
+        * **📈 Gatilhos de Performance:**
+          - Condição de Mercado (TSR): {'✅ Sim' if has_market else '❌ Não'}
+          - Malus / Clawback: {'✅ Sim' if has_malus else '❌ Não'}
+        """
+
+        # Lógica de Modelo e Liquidação (Mantida do anterior)
+        settlement = SettlementType.CASH_SETTLED if "Phantom" in main_type else SettlementType.EQUITY_SETTLED
+        model = PricingModelType.MONTE_CARLO if has_market else PricingModelType.BLACK_SCHOLES_GRADED
+
+        # Retorno do Objeto Preenchido
         return PlanAnalysisResult(
-            summary=f"Plano identificado automaticamente via Regras: {main_type}.",
-            program_summary=f"**Tipo Detectado:** {main_type}\n\n**Mecanismo:** Análise baseada em palavras-chave e expressões regulares (Regex).",
-            valuation_params=f"* **Vesting (Regra):** {vesting_avg} anos.\n* **Lock-up (Regra):** {facts.get('lockup_years', 0.0)} anos.",
-            contract_features=f"Tópicos Encontrados: {', '.join(topic_matches.values())}",
-            methodology_rationale="Metodologia definida por regras estáticas. Recomenda-se validação manual ou uso de IA para maior detalhamento.",
+            summary=f"🔎 Análise via Regras: Detectado **{main_type}**.",
+            program_summary=f"O algoritmo de regras identificou termos compatíveis com **{main_type}**. A metodologia sugerida baseia-se na presença de gatilhos como *TSR* ou *EBITDA*.",
+            
+            # AQUI ESTÁ A MÁGICA: Passamos o texto formatado acima
+            valuation_params=valuation_params_formatted, 
+            
+            contract_features="; ".join(plan_types),
+            methodology_rationale="Metodologia inferida por regras paramétricas (Regex).",
             model_recommended=model,
             settlement_type=settlement,
-            model_reason="Inferido a partir da classificação do tipo de plano e presença de gatilhos de performance.",
-            model_comparison="N/A (Modo Regras)",
-            pros=["Processamento Instantâneo", "Custo Zero", "Dados Numéricos Precisos"],
-            cons=["Falta de Nuance Narrativa", "Pode perder cláusulas atípicas"],
-            tranches=tranches,
-            has_market_condition=facts.get("has_tsr", False),
-            has_strike_correction=facts.get("has_strike_correction", False),
+            model_reason="Inferência baseada em palavras-chave.",
+            model_comparison="N/A",
+            pros=["Custo Zero", "Alta Velocidade"],
+            cons=["Sem análise interpretativa"],
+            tranches=[Tranche(vesting_date=facts.get('vesting_period', 3.0), proportion=1.0, expiration_date=10.0)],
+            has_market_condition=has_market,
             option_life_years=10.0,
-            strike_is_zero=(model == PricingModelType.RSU),
+            strike_is_zero=False,
             lockup_years=facts.get('lockup_years', 0.0)
         )
 
@@ -199,11 +205,18 @@ class DocumentService:
         D) STRIKE ZERO?
            - MODELO: "RSU".
 
-        ### 2. ESTRUTURA DO JSON
-        Gere um JSON estrito com os campos: "program_summary", "valuation_params", "summary", "contract_features", "model_data".
+        ### 2. REGRAS DE FORMATAÇÃO DE TEXTO (VISUAL)
         
-        No campo "model_data", inclua "recommended_model", "settlement_type" (EQUITY_SETTLED/CASH_SETTLED) e "params".
-        Dentro de "params", extraia: "option_life", "strike_price", "vesting_schedule" (lista de objetos), etc.
+        **Campo "valuation_params":**
+        - Gere um texto em Markdown limpo e bonito.
+        - Use Bullet Points (*) com espaçamento duplo.
+        - Destaque valores chave em **negrito**.
+        - Exemplo de Saída Desejada:
+          * **Strike:** R$ 15,00 (Preço fixo)
+          
+          * **Vesting:** 3 anos (Gradual 33%/33%/33%)
+          
+          * **Volatilidade:** 35% a.a. (Histórica)
 
         ### 3. CONTEXTO DO CONTRATO
         {text[:80000]}
