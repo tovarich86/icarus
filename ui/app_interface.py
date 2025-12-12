@@ -43,7 +43,7 @@ class IFRS2App:
             st.error("Erro Crítico: Serviço de Relatório não carregado.")
             return
 
-        # --- 1. DADOS DA EMPRESA ---
+        # --- 1. DADOS DA EMPRESA E PROGRAMA ---
         with st.container(border=True):
             st.subheader("1. Dados da Empresa e Programa")
             c1, c2 = st.columns(2)
@@ -52,20 +52,17 @@ class IFRS2App:
                 emp_ticker = st.text_input("Ticker", "TICK3", key="rep_emp_ticker")
                 emp_aberta = st.checkbox("Capital Aberto?", value=True, key="rep_emp_aberta")
                 
-                # NOVO: Flexibilidade para Bolsa e Método Privado
                 if emp_aberta:
                     nome_bolsa = st.text_input("Bolsa de Valores", "B3 S.A. - Brasil, Bolsa, Balcão", key="rep_bolsa")
                     metodo_privado = ""
                 else:
                     nome_bolsa = ""
-                    metodo_privado = st.text_input("Metodologia de Preço da Ação (Privada)", 
-                                                 "Fluxo de Caixa Descontado (DCF)", 
-                                                 key="rep_metodo_priv",
-                                                 help="Ex: Múltiplos, Última Rodada, Valor Patrimonial.")
+                    metodo_privado = st.text_input("Metodologia de Preço (Privada)", "Fluxo de Caixa Descontado", key="rep_metodo_priv")
 
             with c2:
                 prog_nome = st.text_input("Nome do Plano", "Plano de Stock Options 2025", key="rep_prog_nome")
-                # NOVO: Tipo descritivo para o texto
+                
+                # Tipo detalhado para o texto introdutório
                 tipo_detalhado = st.selectbox("Tipo do Plano (Texto)", 
                                             ["Plano de Opção de Compra de Ações (Stock Options)", 
                                              "Plano de Ações Restritas (Restricted Shares)",
@@ -74,33 +71,54 @@ class IFRS2App:
                                             key="rep_tipo_detalhado")
                 
                 prog_data = st.date_input("Data de Outorga", date.today(), key="rep_prog_data")
-                prog_qtd = st.number_input("Qtd. Beneficiários", 1, 10000, 10, key="rep_prog_qtd")
+                prog_qtd = st.number_input("Qtd. Beneficiários", 1, 10000, 10, key="rep_prog_qtd") # <--- Este valor será usado na tabela
 
-        # --- 2. PREMISSAS TÉCNICAS E CONTÁBEIS ---
+        # --- 2. PREMISSAS TÉCNICAS (NOVOS SELETORES) ---
         with st.container(border=True):
             st.subheader("2. Premissas Técnicas e Contábeis")
             c1, c2 = st.columns(2)
             with c1:
-                st.markdown("**Parâmetros Contábeis**")
-                turnover_contab = st.number_input("Turnover Esperado (% a.a.)", 0.0, 50.0, 5.0, key="rep_turnover") / 100
-                tem_encargos = st.checkbox("Incide Encargos Sociais (INSS)?", False, key="rep_encargos")
+                st.markdown("**Parâmetros de Mercado**")
                 
-                # NOVO: Controle Fino de Indexador
+                # SELETOR DE MOEDA (Corrige o DI vs Bond)
+                moeda_selecionada = st.selectbox(
+                    "Curva de Juros (Moeda)", 
+                    ["BRL (DI1 - Brasil)", "USD (Treasury Bond - EUA)", "EUR (Euro)"],
+                    key="rep_moeda"
+                )
+                
+                # LÓGICA DE DIVIDENDOS (Corrige o texto de Dividendos)
+                # Tenta inferir pelo input do cálculo anterior
+                div_yield_calc = st.session_state['last_calc_results'][0].get('q', 0.0)
+                idx_div = 0 if div_yield_calc == 0 else 2 # Default: Zero ou Penaliza
+                
+                cenario_div = st.selectbox(
+                    "Cenário de Dividendos",
+                    ["ZERO (Sem expectativa)", "PAGO (Protegido/Reinvestido)", "PENALIZA (Desconto no FV)"],
+                    index=idx_div,
+                    key="rep_cenario_div",
+                    help="Define como o texto do laudo explicará o impacto dos dividendos."
+                )
+
+                # Controle de Indexador
                 tem_correcao = st.session_state['analysis_result'].has_strike_correction
                 indice_texto = ""
                 if tem_correcao:
                     indice_texto = st.text_input("Índice de Correção do Strike", "IGPM", key="rep_indice")
 
             with c2:
+                st.markdown("**Parâmetros Contábeis**")
+                turnover_contab = st.number_input("Turnover Esperado (% a.a.)", 0.0, 50.0, 5.0, key="rep_turnover") / 100
+                tem_encargos = st.checkbox("Incide Encargos Sociais (INSS)?", False, key="rep_encargos")
+                
                 st.markdown("**Responsável Técnico**")
                 resp_nome = st.text_input("Nome", "Consultor Responsável", key="rep_resp_nome")
-                resp_cargo = st.text_input("Cargo", "Especialista em Remuneração", key="rep_resp_cargo")
+                resp_cargo = st.text_input("Cargo", "Especialista", key="rep_resp_cargo")
                 resp_email = st.text_input("Email", "contato@exemplo.com", key="rep_resp_email")
 
         # --- 3. GERAÇÃO ---
         st.subheader("3. Geração do Documento")
         
-        # Busca Template
         import os
         possible_paths = ["TEMPLATE_FINAL_PADRAO.docx", "templates/TEMPLATE_FINAL_PADRAO.docx", "ui/TEMPLATE_FINAL_PADRAO.docx"]
         template_path = next((p for p in possible_paths if os.path.exists(p)), None)
@@ -109,50 +127,40 @@ class IFRS2App:
             st.error("❌ Template padrão não encontrado.")
             return
         
-        st.info(f"✅ Template carregado: {template_path}")
-
         if st.button("📄 Gerar Laudo Oficial", type="primary"):
             try:
-                # Lógica de Modelo e Liquidação (Mantida)
+                # Lógica de Modelo
                 modelo_atual = st.session_state['analysis_result'].model_recommended
                 metodologia_str = "BLACK_SCHOLES"
                 if modelo_atual == PricingModelType.BINOMIAL: metodologia_str = "BINOMIAL"
                 elif modelo_atual == PricingModelType.MONTE_CARLO: metodologia_str = "MONTE_CARLO"
                 elif modelo_atual == PricingModelType.RSU: metodologia_str = "COTACAO"
 
+                # Lógica de Liquidação
                 tipo_liq_analise = st.session_state['analysis_result'].settlement_type
-                is_phantom = "Phantom" in tipo_detalhado
-                
-                if is_phantom:
-                    forma_liq_str = "CAIXA"
-                elif emp_aberta:
-                    forma_liq_str = "INSTRUMENTOS DE PATRIMÔNIO (EQUITY)"
-                else:
-                    # Se capital fechado, verifica se a IA detectou Cash ou mantém Caixa por prudência
-                    tipo_liq_analise = st.session_state['analysis_result'].settlement_type
-                    if tipo_liq_analise == SettlementType.EQUITY_SETTLED:
-                         forma_liq_str = "INSTRUMENTOS DE PATRIMÔNIO (EQUITY)"
-                    else:
-                         forma_liq_str = "CAIXA"
+                forma_liq_str = "CAIXA" if tipo_liq_analise == SettlementType.CASH_SETTLED else ("ACOES" if emp_aberta else "CAIXA")
 
-                # Consolida Inputs (AGORA COM OS NOVOS CAMPOS)
+                # Consolida Inputs
                 manual_inputs = {
                     "empresa": {
                         "nome": emp_nome, "ticker": emp_ticker, "capital_aberto": emp_aberta,
-                        "bolsa_nome": nome_bolsa # Novo
+                        "bolsa_nome": nome_bolsa
                     },
                     "programa": {
-                        "nome": prog_nome, "data_outorga": prog_data, "qtd_beneficiarios": prog_qtd,
+                        "nome": prog_nome, "data_outorga": prog_data, 
+                        "qtd_beneficiarios": prog_qtd, # <--- Passando a quantidade correta
                         "metodologia": metodologia_str, "forma_liquidacao": forma_liq_str,
-                        "tipo_detalhado": tipo_detalhado # Novo
+                        "tipo_detalhado": tipo_detalhado
                     },
                     "responsavel": {"nome": resp_nome, "cargo": resp_cargo, "email": resp_email},
                     "contab": {
                         "taxa_turnover": turnover_contab, "tem_encargos": tem_encargos
                     },
-                    "calculo_extra": { # Novos campos de cálculo
+                    "calculo_extra": {
                         "metodo_privado": metodo_privado,
-                        "indice_correcao_nome": indice_texto
+                        "indice_correcao_nome": indice_texto,
+                        "moeda_selecionada": "BRL" if "BRL" in moeda_selecionada else "USD", # Mapeia para BRL ou USD
+                        "cenario_dividendos": cenario_div.split(" ")[0] # Pega só a primeira palavra (ZERO, PAGO, PENALIZA)
                     }
                 }
 
@@ -175,7 +183,7 @@ class IFRS2App:
                 
             except Exception as e:
                 st.error(f"Erro ao gerar documento: {str(e)}")
-
+                
     def run(self) -> None:
         st.set_page_config(page_title="Icarus Valuation", layout="wide", page_icon="🛡️")
         st.title("🛡️ Icarus: Valuation IFRS 2 (Table View)")
