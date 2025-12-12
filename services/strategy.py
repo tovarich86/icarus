@@ -6,9 +6,6 @@ qual motor matemático é o mais adequado, considerando agora as nuances de
 Contabilidade (Equity vs Liability) e a estrutura temporal (Vesting vs Life).
 """
 
-
-"""
-
 from core.domain import PlanAnalysisResult, PricingModelType, SettlementType
 
 class ModelSelectorService:
