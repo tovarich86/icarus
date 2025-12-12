@@ -53,6 +53,10 @@ class Tranche(BaseModel):
         None, 
         description="Strike específico desta tranche, se diferente do global."
     )
+    custom_rate: Optional[float] = Field(
+        None,
+        description="Taxa de juros (decimal) específica para esta tranche. Se None, usa a taxa global."
+    )
 
 class PlanAnalysisResult(BaseModel):
     """
