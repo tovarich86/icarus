@@ -222,7 +222,7 @@ class MarketDataService:
                     if isinstance(taxa_raw, str): taxa_raw = taxa_raw.replace('.', '').replace(',', '.')
                     
                     # Correção Determinística (Padrão B3 4 casas)
-                    val = float(taxa_raw) / 10000.0
+                    val = float(taxa_raw) / 100000.0
                     
                     dias_corridos = (dt_venc - reference_date).days
                     if dias_corridos > 0:
