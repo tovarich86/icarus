@@ -17,6 +17,43 @@ class IFRS2App:
     """
     Aplicação principal do Icarus.
     """
+    def _enable_manual_mode(self):
+        """Inicializa o estado com valores padrão para preenchimento manual."""
+        from core.domain import PlanAnalysisResult, PricingModelType, SettlementType, Tranche
+
+        # Cria um resultado de análise "Dummy" (Vazio/Padrão)
+        manual_analysis = PlanAnalysisResult(
+            summary="Modo Manual: Parâmetros definidos pelo usuário.",
+            program_summary="Os dados do programa foram inseridos manualmente na interface de cálculo.",
+            valuation_params="**Modo Manual**\n\n* Defina o Spot, Strike e Volatilidade nas caixas abaixo.\n\n* Ajuste as tranches conforme necessário.",
+            contract_features="Entrada Manual",
+            methodology_rationale="O usuário optou por selecionar o modelo e parâmetros manualmente, dispensando a leitura automática do contrato.",
+            model_recommended=PricingModelType.BLACK_SCHOLES_GRADED, # Default seguro
+            settlement_type=SettlementType.EQUITY_SETTLED,          # Default seguro
+            model_reason="Seleção manual do usuário.",
+            model_comparison="N/A",
+            pros=["Flexibilidade total"],
+            cons=["Requer conhecimento dos inputs"],
+            tranches=[], # Começa vazio ou com 1 padrão
+            option_life_years=5.0,
+            strike_price=10.0,
+            strike_is_zero=False,
+            turnover_rate=0.0,
+            early_exercise_multiple=2.0,
+            lockup_years=0.0,
+            has_strike_correction=False,
+            has_market_condition=False
+        )
+
+        # Atualiza a Sessão
+        st.session_state['analysis_result'] = manual_analysis
+        st.session_state['full_context_text'] = "Modo Manual - Sem texto de contrato."
+        
+        # Cria uma tranche padrão inicial para não quebrar a UI
+        st.session_state['tranches'] = [Tranche(vesting_date=1.0, proportion=1.0, expiration_date=5.0)]
+        
+        st.success("Modo Manual Ativado! Acesse as abas ao lado para configurar.")
+        st.rerun() # Recarrega a página para exibir o dashboard
     def run(self) -> None:
         st.set_page_config(page_title="Icarus Valuation", layout="wide", page_icon="🛡️")
         
