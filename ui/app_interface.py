@@ -121,7 +121,19 @@ class IFRS2App:
                 elif modelo_atual == PricingModelType.RSU: metodologia_str = "COTACAO"
 
                 tipo_liq_analise = st.session_state['analysis_result'].settlement_type
-                forma_liq_str = "CAIXA" if tipo_liq_analise == SettlementType.CASH_SETTLED else ("ACOES" if emp_aberta else "CAIXA")
+                is_phantom = "Phantom" in tipo_detalhado
+                
+                if is_phantom:
+                    forma_liq_str = "CAIXA"
+                elif emp_aberta:
+                    forma_liq_str = "INSTRUMENTOS DE PATRIMÔNIO (EQUITY)"
+                else:
+                    # Se capital fechado, verifica se a IA detectou Cash ou mantém Caixa por prudência
+                    tipo_liq_analise = st.session_state['analysis_result'].settlement_type
+                    if tipo_liq_analise == SettlementType.EQUITY_SETTLED:
+                         forma_liq_str = "INSTRUMENTOS DE PATRIMÔNIO (EQUITY)"
+                    else:
+                         forma_liq_str = "CAIXA"
 
                 # Consolida Inputs (AGORA COM OS NOVOS CAMPOS)
                 manual_inputs = {
