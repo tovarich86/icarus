@@ -147,6 +147,15 @@ class IFRS2App:
                 st.markdown("**Parâmetros Contábeis**")
                 turnover_contab = st.number_input("Turnover Esperado (% a.a.)", 0.0, 50.0, 5.0, key="rep_turnover") / 100
                 tem_encargos = st.checkbox("Incide Encargos Sociais (INSS)?", False, key="rep_encargos")
+
+                st.markdown("---")
+                st.markdown("**Performance (Não-Mercado)**")
+                tem_nao_mercado = st.checkbox(
+                    "Possui Metas Internas (KPIs)?", 
+                    value=False, 
+                    key="rep_flag_kpi",
+                    help="Marque se o vesting depende de EBITDA, Lucro Líquido ou Metas Operacionais (Não-Mercado)."
+                )
                 
                 st.markdown("**Responsável Técnico**")
                 resp_nome = st.text_input("Nome", "Consultor Responsável", key="rep_resp_nome")
@@ -191,7 +200,8 @@ class IFRS2App:
                     },
                     "responsavel": {"nome": resp_nome, "cargo": resp_cargo, "email": resp_email},
                     "contab": {
-                        "taxa_turnover": turnover_contab, "tem_encargos": tem_encargos
+                        "taxa_turnover": turnover_contab, "tem_encargos": tem_encargos, "tem_performance_nao_mercado": tem_nao_mercado,
+                    "percentual_atingimento": perc_atingimento
                     },
                     "calculo_extra": {
                         "metodo_privado": metodo_privado,
