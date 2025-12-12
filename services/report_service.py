@@ -53,37 +53,23 @@ class ReportService:
 
         data_outorga = prog_info.get("data_outorga", date.today())
         
-        # --- 1. Lógica de Texto para Dividendos (Otimizada) ---
+        # --- 1. Lógica de Dividendos (Apenas Dados) ---
+        # Removemos os textos hardcoded. O Python só calcula o número e repassa a flag.
         cenario_div = extra_info.get("cenario_dividendos", "ZERO")
         div_yield_val = calc_results[0].get('q', 0) if calc_results else 0.0
         div_fmt = ReportService._format_percent(div_yield_val)
 
-        if cenario_div == "PENALIZA":
-            txt_div = (f"O modelo considera um Dividend Yield de {div_fmt}. "
-                       "Como o plano não prevê o pagamento de dividendos durante a carência, "
-                       "isso reduz o fair value da opção.")
-        elif cenario_div == "PAGO":
-            txt_div = ("Embora a companhia pague dividendos, o plano prevê proteção ou pagamento equivalente. "
-                       "Portanto, assume-se Dividend Yield de 0,0% para fins de modelo.")
-        else: 
-            txt_div = "Não foi considerada a distribuição de dividendos relevantes no horizonte projetado (Yield 0%)."
-
-        # --- 2. Inferência de Tipos para Controle de Seção no Word ---
+        # --- 2. Inferência de Tipos ---
         metodologia = prog_info.get("metodologia", "BLACK_SCHOLES")
         tipo_detalhado = prog_info.get("tipo_detalhado", "")
         
         is_rsu = "Restricted" in tipo_detalhado or "RSU" in tipo_detalhado or "COTACAO" in metodologia
         is_performance = "Performance" in tipo_detalhado or analysis_result.has_market_condition
-        is_stock_option = not is_rsu and not is_performance # Default se não for os outros
+        is_stock_option = not is_rsu and not is_performance 
 
-        # --- 3. Lógica de Performance de Não-Mercado (Input Manual Necessário na UI) ---
-        # Como o app_interface não tem esse campo ainda, vamos assumir False ou 100% por padrão
-        # Sugestão: Adicionar 'percentual_atingimento' no manual_inputs['contab'] futuramente
-        tem_nao_mercado = False 
-        perc_atingimento = 1.0
-        if "Performance" in tipo_detalhado and not analysis_result.has_market_condition:
-            tem_nao_mercado = True
-            perc_atingimento = contab_info.get("percentual_atingimento", 1.0)
+        # --- 3. Performance de Não-Mercado ---
+        tem_nao_mercado = contab_info.get("tem_performance_nao_mercado", False)
+        perc_atingimento = contab_info.get("percentual_atingimento", 1.0)
 
         context = {
             "empresa": {
@@ -106,12 +92,10 @@ class ReportService:
             "responsavel": resp_info,
             "regras": {
                 "texto_vesting": f"escalonado em {len(tranches)} tranches",
-                "tem_performance": analysis_result.has_market_condition, # Mercado (TSR)
-                "tem_performance_nao_mercado": tem_nao_mercado,        # Não-Mercado (EBITDA)
+                "tem_performance": analysis_result.has_market_condition,
+                "tem_performance_nao_mercado": tem_nao_mercado,
                 "tem_lockup": analysis_result.lockup_years > 0,
                 "prazo_lockup": f"{analysis_result.lockup_years} anos",
-                
-                # FLAGS PARA O TEMPLATE WORD (HIDE/SHOW SECTIONS)
                 "is_stock_option": is_stock_option,
                 "is_rsu": is_rsu,
                 "is_performance": is_performance
@@ -122,19 +106,20 @@ class ReportService:
                 "bolsa": emp_info.get("bolsa_nome", "B3 S.A.") if emp_info.get("capital_aberto") else "N/A",
                 "metodo_precificacao_privado": extra_info.get("metodo_privado", "Avaliação Interna"),
                 "moeda": extra_info.get("moeda_selecionada", "BRL"),
-                "cenario_dividendos": cenario_div,
-                "texto_explicativo_dividendos": txt_div,
+                
+                # AQUI: Enviamos apenas as variáveis que o Template usa no IF/ELSE
+                "cenario_dividendos": cenario_div, 
+                "dividend_yield": div_fmt,
+                
                 "tem_correcao_strike": analysis_result.has_strike_correction,
                 "indice_correcao": extra_info.get("indice_correcao_nome", "IGPM/IPCA"),
                 "modelo_precificacao": metodologia,
                 "multiplo_exercicio": analysis_result.early_exercise_multiple,
-                "taxa_turnover_pos": f"{analysis_result.turnover_rate*100:.1f}%",
-                "dividend_yield": div_fmt
+                "taxa_turnover_pos": f"{analysis_result.turnover_rate*100:.1f}%"
             },
             "contab": {
                  "taxa_turnover": f"{contab_info.get('taxa_turnover', 0)*100:.1f}%",
                  "tem_encargos": contab_info.get("tem_encargos", False),
-                 # NOVO CAMPO REQUERIDO PELO TEMPLATE
                  "percentual_atingimento": f"{perc_atingimento*100:.1f}%" 
             },
             "tabelas": {
@@ -144,7 +129,7 @@ class ReportService:
             }
         }
         
-        # --- Preenchimento das Tabelas (Mantido) ---
+        # --- Preenchimento das Tabelas ---
         for i, row in enumerate(calc_results):
             lote_nome = f"Lote {row.get('TrancheID', i+1)}"
             S = float(row.get('S', 0))
@@ -161,15 +146,12 @@ class ReportService:
             dt_venc = data_outorga + timedelta(days=int(T*365))
 
             qtd_total = prog_info.get("qtd_beneficiarios", 1)
-            
-            # Ajuste de quantidade se houver performance de não-mercado
-            # Ex: Se meta é 80% provável, contabiliza-se 80% das opções
             qtd_ajustada = int(qtd_total * perc_atingimento) if tem_nao_mercado else qtd_total
 
             context["tabelas"]["cronograma"].append({
                 "nome": context['programa']['nome'],
                 "numero": lote_nome,
-                "qtd": str(qtd_ajustada), # Mostra a quantidade esperada (CPC 10)
+                "qtd": str(qtd_ajustada),
                 "data_outorga": ReportService._format_date(data_outorga),
                 "data_vesting": ReportService._format_date(dt_vesting),
                 "data_vencimento": ReportService._format_date(dt_venc)
@@ -198,13 +180,10 @@ class ReportService:
                 "fv_final": ReportService._format_currency(row.get('FV Unit', 0))
             })
 
-        # Encargos
         if context['contab']['tem_encargos']:
             context["tabelas"]["encargos"].append({"nome": "INSS Patronal + RAT + Terceiros", "valor": "28,0%"})
             context["tabelas"]["encargos"].append({"nome": "FGTS", "valor": "8,0%"})
 
-        # Projeção (Aplicando Turnover e Performance)
-        # O FV Ponderado já deveria considerar isso, mas aqui aplicamos o atingimento se for separado
         fator_atingimento = perc_atingimento if tem_nao_mercado else 1.0
         total_fv = sum([float(r.get('FV Ponderado', 0)) for r in calc_results]) * fator_atingimento
         
@@ -223,7 +202,7 @@ class ReportService:
             })
 
         return context
-
+    
     @staticmethod
     def render_template(template_file, context) -> io.BytesIO:
         doc = DocxTemplate(template_file)
