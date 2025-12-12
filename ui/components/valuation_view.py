@@ -146,6 +146,8 @@ def _render_tranches_editor(model_type):
         "vesting_date": st.column_config.NumberColumn("Vesting (Anos)", format="%.2f"),
         "proportion": st.column_config.NumberColumn("Peso (0-1)", format="%.2f"),
         "expiration_date": st.column_config.NumberColumn("Vencimento (Anos)", format="%.2f"),
+        "custom_rate": st.column_config.NumberColumn("Taxa (%)", format="%.4f"),
+        "custom_strike": st.column_config.NumberColumn("Strike Custom", format="%.2f")
     }
     
     # Mostra coluna de Strike Custom apenas se necessário (Binomial/BS)
@@ -241,25 +243,25 @@ def _execute_deterministic_calc(S, K, vol, r, q, model, bin_params):
     for i, t in enumerate(tranches):
         T_life = t.expiration_date if t.expiration_date else 5.0
         K_final = t.custom_strike if t.custom_strike is not None else K
+        r_calc = t.custom_rate if t.custom_rate is not None else r_global
         
         fv = 0.0
         
         if model == PricingModelType.BLACK_SCHOLES_GRADED:
-            fv = FinancialMath.bs_call(S, K_final, T_life, r, vol, q)
+            fv = FinancialMath.bs_call(S, K_final, T_life, r_calc, vol, q)
             
         elif model == PricingModelType.RSU:
-            # RSU com desconto de Lockup
             base_val = S * np.exp(-q * t.vesting_date)
             lockup = AppState.get_analysis().lockup_years
             discount = 0.0
             if lockup > 0:
-                discount = FinancialMath.calculate_lockup_discount(vol, lockup, base_val, q)
+                discount = FinancialMath.calculate_lockup_discount(vol, lockup, base_val, q) # Chaffe usa r? (Verificar engine)
             fv = base_val - discount
             
         elif model == PricingModelType.BINOMIAL:
             # Binomial Completo
             fv = FinancialMath.binomial_custom_optimized(
-                S=S, K=K_final, r_effective=r, vol=vol, q_yield_eff=q,
+                S=S, K=K_final, r_effective=r_calc, vol=vol, q_yield_eff=q,
                 vesting_years=t.vesting_date,
                 turnover_w=bin_params.get('turnover', 0.0),
                 multiple_M=bin_params.get('multiple_m', 2.0),
