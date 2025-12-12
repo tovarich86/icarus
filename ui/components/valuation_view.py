@@ -192,7 +192,11 @@ def _render_robust_vol_widget(i, key_val):
     st.markdown("Volatilidade (%)")
     c_in, c_pop = st.columns([0.85, 0.15])
     
-    key_widget = f"w_vol_{i}"
+    # Define um ID base único usando o nome da variável de estado
+    # Ex: se key_val for 'vol_val_local_1', o sufixo garante unicidade
+    unique_suffix = key_val 
+    
+    key_widget = f"w_{unique_suffix}"
     
     # Input Numérico Principal
     val = c_in.number_input("Vol", value=st.session_state[key_val], key=key_widget, label_visibility="collapsed", step=0.5)
@@ -200,13 +204,16 @@ def _render_robust_vol_widget(i, key_val):
 
     with c_pop.popover("🔍"):
         st.markdown("###### Calcular Volatilidade")
-        tk = st.text_area("Tickers (sep. vírgula)", "VALE3", key=f"tk_vol_{i}", height=68)
-        c_d1, c_d2 = st.columns(2)
-        d1 = c_d1.date_input("Início", date.today()-timedelta(days=365*2), key=f"d1_vol_{i}")
-        d2 = c_d2.date_input("Fim", date.today(), key=f"d2_vol_{i}")
         
-        k_res = f"res_vol_{i}"
-        if st.button("Buscar Dados", key=f"btn_seek_vol_{i}", use_container_width=True):
+        # ATENÇÃO: Alteramos as keys abaixo para usar 'unique_suffix'
+        tk = st.text_area("Tickers (sep. vírgula)", "VALE3", key=f"tk_{unique_suffix}", height=68)
+        c_d1, c_d2 = st.columns(2)
+        d1 = c_d1.date_input("Início", date.today()-timedelta(days=365*2), key=f"d1_{unique_suffix}")
+        d2 = c_d2.date_input("Fim", date.today(), key=f"d2_{unique_suffix}")
+        
+        k_res = f"res_{unique_suffix}"
+        
+        if st.button("Buscar Dados", key=f"btn_seek_{unique_suffix}", use_container_width=True):
             with st.spinner("Consultando Yahoo Finance..."):
                 tickers_list = [t.strip() for t in tk.split(',')]
                 res = MarketDataService.get_peer_group_volatility(tickers_list, d1, d2)
@@ -220,25 +227,26 @@ def _render_robust_vol_widget(i, key_val):
                     f"EWMA (Exponencial): {summ['mean_ewma']*100:.2f}%": summ['mean_ewma']*100,
                     f"Histórica (Std): {summ['mean_std']*100:.2f}%": summ['mean_std']*100
                 }
+                
+                # Lógica do GARCH (que você adicionou)
                 if summ.get('mean_garch', 0) > 0:
                     opts[f"GARCH (Preditiva): {summ['mean_garch']*100:.2f}%"] = summ['mean_garch']*100
-                # -----------------------------------------------
 
-                sel_label = st.radio("Selecione a Métrica:", list(opts.keys()), key=f"rad_vol_{i}")
-                sel_label = st.radio("Selecione a Métrica:", list(opts.keys()), key=f"rad_vol_{i}")
+                # AQUI ESTAVA O ERRO: Mudamos key=f"rad_vol_{i}" para key=f"rad_{unique_suffix}"
+                sel_label = st.radio("Selecione a Métrica:", list(opts.keys()), key=f"rad_{unique_suffix}")
                 
-                # CORREÇÃO AQUI: Passamos key_widget para atualizar a caixa de texto
-                st.button("Aplicar Valor", key=f"btn_apply_vol_{i}", type="primary", use_container_width=True,
+                st.button("Aplicar Valor", key=f"btn_apply_{unique_suffix}", type="primary", use_container_width=True,
                           on_click=_update_widget_state, args=(key_val, key_widget, opts[sel_label]))
                 
                 if "audit_excel" in res and res["audit_excel"]:
                     st.download_button("💾 Baixar Auditoria (XLSX)", data=res["audit_excel"],
-                                       file_name=f"auditoria_vol_{i+1}.xlsx",
+                                       file_name=f"auditoria_{unique_suffix}.xlsx",
                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                       key=f"dl_vol_{i}", use_container_width=True)
+                                       key=f"dl_{unique_suffix}", use_container_width=True)
             elif "error" in res:
                 st.error("Erro na busca.")
     return val
+
 
 def _render_robust_rate_widget(i, key_val, t_years):
     st.markdown("Taxa Livre de Risco (%)")
