@@ -18,7 +18,7 @@ def render_valuation_dashboard():
         st.info("👈 Faça o upload do contrato na barra lateral para iniciar.")
         return
 
-    # --- Seção 1: Diagnóstico ---
+    # --- Seção 1: Diagnóstico (Mantido) ---
     with st.container(border=True):
         c1, c2 = st.columns([1, 1])
         with c1:
@@ -26,43 +26,54 @@ def render_valuation_dashboard():
             st.info(f"**Resumo:** {analysis.summary}")
             st.caption(f"**Classificação Contábil:** {str(analysis.settlement_type)}")
         with c2:
-            st.subheader("Metodologia")
-            st.success(f"**Modelo Recomendado:** {str(analysis.model_recommended)}")
+            st.subheader("Metodologia IA")
+            st.success(f"**Recomendação:** {str(analysis.model_recommended)}")
             st.markdown(f"> {analysis.methodology_rationale}")
 
     st.divider()
 
-    # --- Seção 2: Premissas de Mercado (Globais/Defaults) ---
+    # --- UX ADJUSTMENT: Seleção de Modelo (Movido para cima) ---
+    # Colocamos em colunas para não ficar "esticado" demais
+    c_model, c_spacer = st.columns([1, 2]) 
+    
+    with c_model:
+        st.subheader("Configuração")
+        opts = [m for m in PricingModelType if m != PricingModelType.UNDEFINED]
+        idx = opts.index(analysis.model_recommended) if analysis.model_recommended in opts else 0
+        
+        active_model = st.selectbox(
+            "Modelo de Precificação (Override)", 
+            options=opts,
+            index=idx,
+            format_func=lambda x: x.value,
+            help="Selecione manualmente o modelo matemático caso discorde da recomendação da IA."
+        )
+        
+        # Atualiza a análise se o usuário mudar o modelo
+        if active_model != analysis.model_recommended:
+            analysis.model_recommended = active_model
+
+    # --- UX ADJUSTMENT: Premissas de Mercado (5 Colunas na mesma linha) ---
     st.subheader("Premissas de Mercado (Referência Global)")
-    c1, c2, c3, c4 = st.columns(4)
     
-    S_global = c1.number_input("Spot (R$)", value=50.0, step=0.5, format="%.2f", help="Preço atual da ação.", key="glob_S")
-    K_global = c2.number_input("Strike (R$)", value=analysis.strike_price, step=0.5, format="%.2f", help="Preço de exercício global.", key="glob_K")
+    # Grid de 5 colunas resolve o problema do Dividend Yield sozinho na linha
+    c1, c2, c3, c4, c5 = st.columns(5)
     
-    # Widgets Globais (Mantidos para compatibilidade visual)
+    with c1:
+        S_global = st.number_input("Spot (R$)", value=50.0, step=0.5, format="%.2f", help="Preço atual da ação.", key="glob_S")
+    with c2:
+        K_global = st.number_input("Strike (R$)", value=analysis.strike_price, step=0.5, format="%.2f", help="Preço de exercício global.", key="glob_K")
     with c3:
         vol_global = _render_volatility_widget_global()
     with c4:
         r_global = _render_rate_widget_global()
-    
-    q_global = st.number_input("Dividend Yield (% a.a.)", value=0.0, step=0.1, key="glob_q") / 100
-
-    # Override de Modelo
-    opts = [m for m in PricingModelType if m != PricingModelType.UNDEFINED]
-    idx = opts.index(analysis.model_recommended) if analysis.model_recommended in opts else 0
-    active_model = st.selectbox(
-        "Modelo de Precificação (Override)", 
-        options=opts,
-        index=idx,
-        format_func=lambda x: x.value
-    )
-    
-    if active_model != analysis.model_recommended:
-        analysis.model_recommended = active_model
+    with c5:
+        # Agora o Dividend Yield fica alinhado com os outros inputs
+        q_global = st.number_input("Div. Yield (% a.a.)", value=0.0, step=0.1, key="glob_q") / 100
 
     st.divider()
 
-    # --- Seção 3: Renderização Específica por Modelo ---
+    # --- Seção 3: Renderização Específica (Mantido) ---
     if active_model == PricingModelType.MONTE_CARLO:
         _render_monte_carlo_ai_section(S_global, K_global, r_global, vol_global, q_global, analysis)
     else:
