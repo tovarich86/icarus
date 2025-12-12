@@ -211,6 +211,9 @@ class IFRS2App:
             
             if st.button("🚀 Analisar Contrato", type="primary"):
                 self._handle_analysis(uploaded_files, manual_text, gemini_key)
+            st.divider()
+            if st.button("🛠️ Modo Manual (Pular Análise)", type="secondary", help="Inicia o cálculo com parâmetros zerados, sem ler documentos."):
+                self._enable_manual_mode()
             
             st.divider()
             st.caption("v.Release 1.7 - UX/UI Boost")
