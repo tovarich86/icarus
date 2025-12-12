@@ -6,7 +6,7 @@ import sys
 from datetime import date, timedelta
 
 from ui.state import AppState
-from core.domain import PricingModelType, Tranche
+from core.domain import PricingModelType, Tranche, SettlementType
 from engines.financial import FinancialMath
 from services.market_data import MarketDataService
 from services.ai_service import DocumentService
@@ -24,32 +24,27 @@ def render_valuation_dashboard():
         with c1:
             st.subheader("Diagnóstico do Plano")
             st.info(f"**Resumo:** {analysis.summary}")
-            # CORREÇÃO: Usar str() em vez de .value para evitar Attribute Error 
-            # quando o tipo Enum é perdido na serialização do Session State.
             st.caption(f"**Classificação Contábil:** {str(analysis.settlement_type)}")
         with c2:
             st.subheader("Metodologia")
-            # CORREÇÃO: Aplicar o mesmo tratamento para o Modelo Recomendado.
             st.success(f"**Modelo Recomendado:** {str(analysis.model_recommended)}")
             st.markdown(f"> {analysis.methodology_rationale}")
 
     st.divider()
 
-    # --- Seção 2: Inputs Globais e Mercado ---
-    st.subheader("Premissas de Mercado")
+    # --- Seção 2: Premissas de Mercado (Globais/Defaults) ---
+    st.subheader("Premissas de Mercado (Referência Global)")
     c1, c2, c3, c4 = st.columns(4)
-    S = c1.number_input("Spot (R$)", value=50.0, step=0.5, format="%.2f", help="Preço atual da ação.")
-    K = c2.number_input("Strike (R$)", value=analysis.strike_price, step=0.5, format="%.2f", help="Preço de exercício.")
     
-    # Widget Avançado de Volatilidade
+    S_global = c1.number_input("Spot (R$)", value=50.0, step=0.5, format="%.2f", help="Preço atual da ação.", key="glob_S")
+    K_global = c2.number_input("Strike (R$)", value=analysis.strike_price, step=0.5, format="%.2f", help="Preço de exercício global.", key="glob_K")
+    
     with c3:
-        vol_input = _render_volatility_widget_global()
-    
-    # Widget Avançado de Taxa de Juros
+        vol_global = _render_volatility_widget_global()
     with c4:
-        r_input = _render_rate_widget_global()
+        r_global = _render_rate_widget_global()
     
-    q_input = st.number_input("Dividend Yield (% a.a.)", value=0.0, step=0.1) / 100
+    q_global = st.number_input("Dividend Yield (% a.a.)", value=0.0, step=0.1, key="glob_q") / 100
 
     # Override de Modelo
     opts = [m for m in PricingModelType if m != PricingModelType.UNDEFINED]
@@ -60,232 +55,262 @@ def render_valuation_dashboard():
         index=idx,
         format_func=lambda x: x.value
     )
+    
+    # Sincroniza modelo escolhido com o objeto de análise para o relatório
+    if active_model != analysis.model_recommended:
+        analysis.model_recommended = active_model
 
     st.divider()
 
     # --- Seção 3: Renderização Específica por Modelo ---
     if active_model == PricingModelType.MONTE_CARLO:
-        _render_monte_carlo_ai_section(S, K, r_input, vol_input, q_input, analysis)
+        _render_monte_carlo_ai_section(S_global, K_global, r_global, vol_global, q_global, analysis)
     else:
-        # Para modelos determinísticos (BS, Binomial, RSU)
-        st.subheader("Estrutura de Vesting")
-        
-        # Inputs Específicos do Binomial
-        binomial_params = {}
-        if active_model == PricingModelType.BINOMIAL:
-            with st.expander("⚙️ Parâmetros Binomiais (Turnover & Barreiras)", expanded=True):
-                bc1, bc2, bc3 = st.columns(3)
-                binomial_params['turnover'] = bc1.number_input("Turnover (% a.a.)", value=analysis.turnover_rate*100) / 100
-                binomial_params['multiple_m'] = bc2.number_input("Múltiplo M (Early Exercise)", value=analysis.early_exercise_multiple)
-                binomial_params['strike_corr'] = bc3.number_input("Correção Strike (% a.a.)", value=4.5 if analysis.has_strike_correction else 0.0) / 100
-        
-        # Editor de Tranches
-        _render_tranches_editor(active_model)
+        # VISUALIZAÇÃO DETALHADA RESTAURADA (Botões + Cards)
+        _render_detailed_tranches_view(active_model, S_global, K_global, vol_global, r_global, q_global, analysis)
 
-        if st.button("🧮 Calcular Fair Value", type="primary", use_container_width=True):
-            _execute_deterministic_calc(S, K, vol_input, r_input, q_input, active_model, binomial_params)
 
-# --- Sub-componentes de Mercado (Restaurados do app_interface original) ---
+def _render_detailed_tranches_view(model, S, K, vol, r, q, analysis):
+    st.subheader("Estrutura de Vesting & Precificação")
+    
+    # 1. BOTÕES DE CONTROLE RESTAURADOS
+    c_add, c_rem, _ = st.columns([1, 1, 3])
+    if c_add.button("➕ Adicionar Tranche", use_container_width=True):
+        AppState.add_tranche_action()
+        st.rerun()
+    if c_rem.button("➖ Remover Tranche", use_container_width=True):
+        AppState.remove_last_tranche_action()
+        st.rerun()
 
-def _render_volatility_widget_global():
-    """Widget com Popover para busca de Volatilidade (Yahoo Finance)."""
-    key_val = "global_vol_val"
-    if key_val not in st.session_state: st.session_state[key_val] = 30.0
+    tranches = AppState.get_tranches()
+    inputs_calc = []
+    
+    if not tranches:
+        st.warning("Nenhuma tranche definida. Adicione uma para começar.")
+        return
 
+    # 2. RENDERIZAÇÃO CARTÃO POR CARTÃO
+    for i, t in enumerate(tranches):
+        with st.container(border=True):
+            st.markdown(f"##### 🔹 Tranche {i+1}")
+            
+            # --- Linha 1: Tempos e Proporção ---
+            c1, c2, c3, c4 = st.columns(4)
+            
+            def_exp = t.expiration_date if t.expiration_date else analysis.option_life_years
+            t_exp = c1.number_input("Vencimento (Anos)", value=float(def_exp), key=f"t_exp_{i}", min_value=0.1)
+            
+            t_vest = c2.number_input("Vesting (Anos)", value=float(t.vesting_date), key=f"t_vest_{i}", min_value=0.0)
+            
+            t_prop = c3.number_input("Peso (%)", value=float(t.proportion*100), key=f"t_prop_{i}", step=5.0) / 100
+            
+            # --- Linha 2: Parâmetros Específicos (Vol/Rate/Strike) ---
+            cm1, cm2, cm3 = st.columns(3)
+            
+            # Strike Específico (Override)
+            k_display = t.custom_strike if t.custom_strike is not None else K
+            t_k = cm1.number_input("Strike", value=float(k_display), key=f"t_k_{i}")
+            
+            # Widgets Locais de Vol e Rate (Restaurados)
+            with cm2:
+                # Usa Session State local para overrides sem persistir no objeto Tranche (que é limpo)
+                key_vol = f"vol_local_{i}"
+                if key_vol not in st.session_state: st.session_state[key_vol] = vol * 100
+                t_vol = _render_local_vol_widget(i, st.session_state[key_vol]) / 100
+            
+            with cm3:
+                key_rate = f"rate_local_{i}"
+                if key_rate not in st.session_state: st.session_state[key_rate] = r * 100
+                t_r = _render_local_rate_widget(i, st.session_state[key_rate], t_exp) / 100
+
+            # --- Linha 3: Avançado (Binomial/Lockup) ---
+            # Defaults da Análise
+            t_lock = analysis.lockup_years
+            t_turnover = analysis.turnover_rate
+            t_m = analysis.early_exercise_multiple
+            t_corr = 4.5 if analysis.has_strike_correction else 0.0
+
+            if model == PricingModelType.BINOMIAL or model == PricingModelType.RSU:
+                 with st.expander("⚙️ Avançado (Lockup, Turnover, Barreiras)", expanded=False):
+                     ca1, ca2, ca3, ca4 = st.columns(4)
+                     t_lock = ca1.number_input("Lockup (Anos)", value=float(t_lock), key=f"t_lock_{i}")
+                     
+                     if model == PricingModelType.BINOMIAL:
+                         t_turnover = ca2.number_input("Turnover (% a.a.)", value=float(t_turnover*100), key=f"t_turn_{i}") / 100
+                         t_m = ca3.number_input("Múltiplo M (Exer.)", value=float(t_m), key=f"t_m_{i}")
+                         t_corr = ca4.number_input("Corr. Strike (% a.a.)", value=float(t_corr), key=f"t_corr_{i}") / 100
+            
+            # Consolida input para cálculo
+            inputs_calc.append({
+                "TrancheID": i+1,
+                "S": S, "K": t_k, "q": q,
+                "T": t_exp, "Vesting": t_vest, "Prop": t_prop,
+                "Vol": t_vol, "r": t_r,
+                "Lockup": t_lock, "Turnover": t_turnover, "M": t_m, "StrikeCorr": t_corr
+            })
+
+    # 3. BOTÃO DE CÁLCULO
+    if st.button("🧮 Calcular Fair Value (Todos)", type="primary", use_container_width=True):
+        _execute_calc_restore(inputs_calc, model)
+
+
+# --- WIDGETS AUXILIARES (LOCAIS POR TRANCHE) ---
+
+def _render_local_vol_widget(i, default_val):
     c_in, c_pop = st.columns([0.85, 0.15])
-    val = c_in.number_input("Volatilidade (%)", value=st.session_state[key_val], step=1.0) / 100
+    key_w = f"w_vol_local_{i}"
+    val = c_in.number_input("Vol (%)", value=float(default_val), key=key_w, step=1.0)
     
     with c_pop.popover("🔍"):
-        st.markdown("###### Buscar Volatilidade")
-        tk = st.text_input("Tickers (ex: VALE3)", "VALE3")
-        d1 = st.date_input("Início", date.today()-timedelta(days=365))
-        if st.button("Buscar Dados"):
-            with st.spinner("Consultando..."):
-                res = MarketDataService.get_peer_group_volatility([t.strip() for t in tk.split(',')], d1, date.today())
-                if "summary" in res:
-                    new_vol = res['summary']['mean_ewma'] * 100
-                    st.session_state[key_val] = new_vol
-                    st.success(f"Vol EWMA encontrada: {new_vol:.2f}%")
-                    st.rerun()
-    return val
-
-def _render_rate_widget_global():
-    """Widget com Popover para busca de Taxa DI (B3)."""
-    key_val = "global_rate_val"
-    if key_val not in st.session_state: st.session_state[key_val] = 10.75
-
-    c_in, c_pop = st.columns([0.85, 0.15])
-    val = c_in.number_input("Taxa Livre Risco (%)", value=st.session_state[key_val], step=0.1) / 100
-    
-    with c_pop.popover("📉"):
-        st.markdown("###### Curva DI (B3)")
-        if st.button("Carregar B3"):
-            with st.spinner("Lendo B3..."):
-                df = MarketDataService.get_di_data_b3(date.today())
-                if not df.empty:
-                    st.session_state['di_data_cache'] = df
-        
-        if 'di_data_cache' in st.session_state:
-            df = st.session_state['di_data_cache']
-            st.dataframe(df[['Vencimento_Fmt', 'Taxa']], hide_index=True, use_container_width=True)
-            
-            # Seletor simples
-            opts = [f"{row['Vencimento_Fmt']} - {row['Taxa']*100:.2f}%" for _, row in df.iterrows()]
-            sel = st.selectbox("Selecionar Vértice", opts)
-            if st.button("Aplicar Taxa"):
-                rate_val = float(sel.split(' - ')[1].replace('%',''))
-                st.session_state[key_val] = rate_val
+        st.markdown("###### Volatilidade Histórica")
+        tk = st.text_input("Ticker", "VALE3", key=f"tk_{i}")
+        if st.button("Buscar", key=f"btn_vol_{i}"):
+            res = MarketDataService.get_peer_group_volatility([tk], date.today()-timedelta(days=365), date.today())
+            if "summary" in res:
+                st.session_state[f"vol_local_{i}"] = res['summary']['mean_ewma'] * 100
                 st.rerun()
     return val
 
-# --- Sub-componentes de Lógica de Negócio ---
-
-def _render_tranches_editor(model_type):
-    """Editor de tranches adaptado para o Streamlit."""
-    tranches = AppState.get_tranches()
-    data = [t.model_dump() for t in tranches]
+def _render_local_rate_widget(i, default_val, t_years):
+    c_in, c_pop = st.columns([0.85, 0.15])
+    key_w = f"w_rate_local_{i}"
+    val = c_in.number_input("Taxa (%)", value=float(default_val), key=key_w, step=0.1)
     
-    cols = {
-        "vesting_date": st.column_config.NumberColumn("Vesting (Anos)", format="%.2f"),
-        "proportion": st.column_config.NumberColumn("Peso (0-1)", format="%.2f"),
-        "expiration_date": st.column_config.NumberColumn("Vencimento (Anos)", format="%.2f"),
-        "custom_rate": st.column_config.NumberColumn("Taxa (%)", format="%.4f"),
-        "custom_strike": st.column_config.NumberColumn("Strike Custom", format="%.2f")
-    }
+    with c_pop.popover("📉"):
+        st.markdown("###### Curva DI")
+        if st.button("Carregar B3", key=f"btn_di_{i}"):
+            df = MarketDataService.get_di_data_b3(date.today())
+            st.session_state['di_cache'] = df
+        
+        if 'di_cache' in st.session_state:
+            df = st.session_state['di_cache']
+            target_days = t_years * 365
+            idx = (df['Dias_Corridos'] - target_days).abs().idxmin()
+            opts = [f"{row['Vencimento_Fmt']} - {row['Taxa']*100:.2f}%" for _, row in df.iterrows()]
+            
+            sel = st.selectbox("Vértice", opts, index=int(idx), key=f"sel_di_{i}")
+            if st.button("Aplicar", key=f"app_di_{i}"):
+                st.session_state[f"rate_local_{i}"] = float(sel.split('-')[1].replace('%',''))
+                st.rerun()
+    return val
+
+# --- LÓGICA DE CÁLCULO ---
+
+def _execute_calc_restore(inputs, model):
+    results = []
+    total_fv = 0.0
+
+    for item in inputs:
+        # Extração
+        S, K, T, r, vol, q = item['S'], item['K'], item['T'], item['r'], item['Vol'], item['q']
+        vesting, prop = item['Vesting'], item['Prop']
+        lockup = item['Lockup']
+        
+        fv = 0.0
+        
+        if model == PricingModelType.BLACK_SCHOLES_GRADED:
+            fv = FinancialMath.bs_call(S, K, T, r, vol, q)
+            
+        elif model == PricingModelType.RSU:
+            base_val = S * np.exp(-q * vesting) # Desconta dividendos até vesting
+            disc = 0.0
+            if lockup > 0:
+                disc = FinancialMath.calculate_lockup_discount(vol, lockup, base_val, q)
+            fv = base_val - disc
+            
+        elif model == PricingModelType.BINOMIAL:
+            fv = FinancialMath.binomial_custom_optimized(
+                S=S, K=K, r_effective=r, vol=vol, q_yield_eff=q,
+                vesting_years=vesting,
+                turnover_w=item['Turnover'],
+                multiple_M=item['M'],
+                hurdle_H=0.0,
+                T_years=T,
+                inflacao_anual=item['StrikeCorr'],
+                lockup_years=lockup
+            )
+
+        w_fv = fv * prop
+        total_fv += w_fv
+        
+        # Adiciona resultado enriquecido
+        res_row = item.copy()
+        res_row.update({
+            "FV Unit": fv,
+            "FV Ponderado": w_fv
+        })
+        results.append(res_row)
+
+    AppState.set_calc_results(results)
+    st.success(f"Cálculo Concluído! Fair Value Total: R$ {total_fv:,.2f}")
     
-    # Mostra coluna de Strike Custom apenas se necessário (Binomial/BS)
-    if model_type != PricingModelType.RSU:
-        cols["custom_strike"] = st.column_config.NumberColumn("Strike Custom", format="%.2f")
+    # Exibe Tabela Resumo
+    df = pd.DataFrame(results)
+    cols_show = ["TrancheID", "FV Unit", "FV Ponderado", "S", "K", "Vol", "T"]
+    st.dataframe(df[[c for c in cols_show if c in df.columns]], use_container_width=True)
 
-    edited_data = st.data_editor(
-        data, 
-        column_config=cols,
-        num_rows="dynamic",
-        use_container_width=True,
-        key=f"editor_{model_type}"
-    )
+# --- MANTER WIDGETS GLOBAIS ORIGINAIS PARA RETROCOMPATIBILIDADE ---
+def _render_volatility_widget_global():
+    key_val = "global_vol_val"
+    if key_val not in st.session_state: st.session_state[key_val] = 30.0
+    c_in, c_pop = st.columns([0.85, 0.15])
+    val = c_in.number_input("Volatilidade (%)", value=st.session_state[key_val], step=1.0) / 100
+    with c_pop.popover("🔍"):
+        tk = st.text_input("Ticker Global", "VALE3")
+        if st.button("Buscar Global"):
+            res = MarketDataService.get_peer_group_volatility([tk], date.today()-timedelta(days=365), date.today())
+            if "summary" in res:
+                st.session_state[key_val] = res['summary']['mean_ewma'] * 100
+                st.rerun()
+    return val
 
-    if edited_data != data:
-        # Reconstrói objetos Pydantic a partir do dict
-        try:
-            new_tranches = [Tranche(**row) for row in edited_data]
-            AppState.set_tranches(new_tranches)
-        except Exception:
-            pass # Evita erro durante a digitação incompleta
+def _render_rate_widget_global():
+    key_val = "global_rate_val"
+    if key_val not in st.session_state: st.session_state[key_val] = 10.75
+    c_in, c_pop = st.columns([0.85, 0.15])
+    val = c_in.number_input("Taxa (%)", value=st.session_state[key_val], step=0.1) / 100
+    return val
 
 def _render_monte_carlo_ai_section(S, K, r, vol, q, analysis):
-    """Restaura a funcionalidade de geração e execução de código Python."""
     st.info("🤖 Monte Carlo via IA: Gera e executa script customizado.")
-    
     tranches_dates = [t.vesting_date for t in AppState.get_tranches()]
     params = {
         "S0": S, "K": K, "r": r, "sigma": vol, "q": q,
         "T": analysis.option_life_years,
         "vesting_schedule": tranches_dates
     }
-    
     c1, c2 = st.columns(2)
-    # Passo 1: Gerar
     if c1.button("1. Gerar Código Python"):
-        api_key = st.secrets.get("GEMINI_API_KEY", "") # Idealmente buscar do state/sidebar
+        api_key = st.secrets.get("GEMINI_API_KEY", "")
         if not api_key:
-            st.error("API Key necessária para gerar código.")
+            st.error("API Key necessária.")
             return
-            
         with st.spinner("Escrevendo script..."):
             ctx = AppState.get_context_text()
             code = DocumentService.generate_custom_monte_carlo_code(ctx, params, api_key)
             AppState.set_mc_code(code)
-            
-    # Passo 2: Editar e Executar
     current_code = AppState.get_mc_code()
     if current_code:
-        edited_code = st.text_area("Script Python (Editável)", value=current_code, height=300)
+        edited_code = st.text_area("Script Python", value=current_code, height=300)
         AppState.set_mc_code(edited_code)
-        
         if c2.button("2. Executar Simulação", type="primary"):
             _run_custom_code(edited_code)
 
 def _run_custom_code(code):
-    """Execução segura de código (Sandbox simulado)."""
     old_stdout = io.StringIO()
     sys.stdout = old_stdout
     local_scope = {}
-    
     try:
         with st.spinner("Simulando..."):
             exec(code, local_scope)
-            
         output = old_stdout.getvalue()
         sys.stdout = sys.__stdout__
-        
-        st.text("Output do Console:")
+        st.text("Output:")
         st.code(output)
-        
         if 'fv' in local_scope:
             fv = float(local_scope['fv'])
-            st.metric("Fair Value (Resultado)", f"R$ {fv:,.2f}")
-            # Salva um resultado sintético para o relatório
-            AppState.set_calc_results([{
-                "Tranche": "Total (MC)", "FV Unit": fv, "FV Ponderado": fv,
-                "S": 0, "K": 0, "Vol": 0, "r": 0, "T": 0, "q": 0
-            }])
-        else:
-            st.warning("Variável 'fv' não encontrada no escopo final.")
-            
+            st.metric("Fair Value", f"R$ {fv:,.2f}")
+            AppState.set_calc_results([{"Tranche": "Total (MC)", "FV Unit": fv, "FV Ponderado": fv, "S": 0, "K": 0, "Vol": 0, "r": 0, "T": 0, "q": 0}])
     except Exception as e:
         sys.stdout = sys.__stdout__
-        st.error(f"Erro na execução: {e}")
-
-def _execute_deterministic_calc(S, K, vol, r_global, q, model, bin_params):
-    """Calculadora para modelos fechados (BS, Binomial, RSU)."""
-    tranches = AppState.get_tranches()
-    results = []
-    total_fv = 0.0
-
-    for i, t in enumerate(tranches):
-        T_life = t.expiration_date if t.expiration_date else 5.0
-        K_final = t.custom_strike if t.custom_strike is not None else K
-        r_calc = t.custom_rate if t.custom_rate is not None else r_global
-        
-        fv = 0.0
-        
-        if model == PricingModelType.BLACK_SCHOLES_GRADED:
-            fv = FinancialMath.bs_call(S, K_final, T_life, r_calc, vol, q)
-            
-        elif model == PricingModelType.RSU:
-            base_val = S * np.exp(-q * t.vesting_date)
-            lockup = AppState.get_analysis().lockup_years
-            discount = 0.0
-            if lockup > 0:
-                discount = FinancialMath.calculate_lockup_discount(vol, lockup, base_val, q) # Chaffe uses q (dividend yield) not r (risk-free rate) in the exponential decay.
-            fv = base_val - discount
-            
-        elif model == PricingModelType.BINOMIAL:
-            # Binomial Completo
-            fv = FinancialMath.binomial_custom_optimized(
-                S=S, K=K_final, r_effective=r_calc, vol=vol, q_yield_eff=q,
-                vesting_years=t.vesting_date,
-                turnover_w=bin_params.get('turnover', 0.0),
-                multiple_M=bin_params.get('multiple_m', 2.0),
-                hurdle_H=0.0, # Hurdle não exposto na UI simplificada
-                T_years=T_life,
-                inflacao_anual=bin_params.get('strike_corr', 0.0),
-                lockup_years=AppState.get_analysis().lockup_years
-            )
-
-        w_fv = fv * t.proportion
-        total_fv += w_fv
-        
-        results.append({
-            "Tranche": i + 1,
-            "Vesting": t.vesting_date,
-            "Vencimento": T_life,
-            "FV Unit": fv,
-            "FV Ponderado": w_fv,
-            "S": S, "K": K_final, "Vol": vol, "r": r_global, "q": q
-        })
-
-    AppState.set_calc_results(results)
-    st.success(f"Cálculo Concluído! Fair Value Total: R$ {total_fv:,.2f}")
-    st.dataframe(pd.DataFrame(results))
+        st.error(f"Erro: {e}")
