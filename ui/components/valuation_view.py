@@ -39,7 +39,7 @@ def render_valuation_dashboard():
     S_global = c1.number_input("Spot (R$)", value=50.0, step=0.5, format="%.2f", help="Preço atual da ação.", key="glob_S")
     K_global = c2.number_input("Strike (R$)", value=analysis.strike_price, step=0.5, format="%.2f", help="Preço de exercício global.", key="glob_K")
     
-    # Widgets Globais Simplificados (Mantidos para compatibilidade, mas o foco é o detalhado nas tranches)
+    # Widgets Globais (Mantidos para compatibilidade visual)
     with c3:
         vol_global = _render_volatility_widget_global()
     with c4:
@@ -98,7 +98,9 @@ def _render_detailed_tranches_view(model, S, K, vol, r, q, analysis):
             def_exp = t.expiration_date if t.expiration_date else analysis.option_life_years
             t_exp = c1.number_input("Vencimento (Anos)", value=float(def_exp), key=f"t_exp_{i}", min_value=0.1)
             t_vest = c2.number_input("Vesting (Anos)", value=float(t.vesting_date), key=f"t_vest_{i}", min_value=0.0)
-            t_prop = c3.number_input("Peso (%)", value=float(t.proportion*100), key=f"t_prop_{i}", step=5.0) / 100
+            
+            # ATENÇÃO: Se for uma nova tranche (prop=0), o usuário deve editar.
+            t_prop = c3.number_input("Peso (%)", value=float(t.proportion*100), key=f"t_prop_{i}", step=5.0) / 100.0
             
             # Linha 2: Mercado Específico (Restaurado o Robust)
             cm1, cm2, cm3 = st.columns(3)
@@ -109,22 +111,15 @@ def _render_detailed_tranches_view(model, S, K, vol, r, q, analysis):
             
             # VOLATILIDADE (Widget Restaurado)
             with cm2:
-                # Inicializa valor local se não existir
                 key_vol_val = f"vol_val_local_{i}"
-                if key_vol_val not in st.session_state: 
-                    st.session_state[key_vol_val] = vol * 100
-                
-                # Renderiza o widget robusto
+                if key_vol_val not in st.session_state: st.session_state[key_vol_val] = vol * 100
                 t_vol_pct = _render_robust_vol_widget(i, key_vol_val)
                 t_vol = t_vol_pct / 100.0
             
             # TAXA DI (Widget Restaurado)
             with cm3:
                 key_rate_val = f"rate_val_local_{i}"
-                if key_rate_val not in st.session_state: 
-                    st.session_state[key_rate_val] = r * 100
-                
-                # Renderiza o widget robusto passando o vencimento alvo
+                if key_rate_val not in st.session_state: st.session_state[key_rate_val] = r * 100
                 t_r_pct = _render_robust_rate_widget(i, key_rate_val, t_exp)
                 t_r = t_r_pct / 100.0
 
@@ -151,23 +146,46 @@ def _render_detailed_tranches_view(model, S, K, vol, r, q, analysis):
             })
 
     if st.button("🧮 Calcular Fair Value (Todos)", type="primary", use_container_width=True):
+        # 1. Atualiza o Estado (Core) com os valores da Tela para persistência
+        _sync_inputs_to_state(inputs_calc)
+        # 2. Executa cálculo
         _execute_calc_restore(inputs_calc, model)
 
 
-# --- WIDGETS ROBUSTOS RESTAURADOS (Baseado no app_interface_bkp.py) ---
+def _sync_inputs_to_state(inputs):
+    """Atualiza o AppState com os valores editados na tela antes do cálculo."""
+    new_tranches = []
+    for item in inputs:
+        # Reconstrói objeto Tranche com dados atualizados
+        t = Tranche(
+            vesting_date=item['Vesting'],
+            proportion=item['Prop'],
+            expiration_date=item['T'],
+            custom_strike=item['K'],
+            custom_rate=item['r']
+        )
+        new_tranches.append(t)
+    
+    # Salva no estado global para que o Gerador de Laudo use os dados corretos
+    AppState.set_tranches(new_tranches)
 
-def _update_widget_state(key_val: str, value: float):
-    """Callback seguro para atualizar estado."""
+
+# --- WIDGETS ROBUSTOS RESTAURADOS & CORRIGIDOS ---
+
+def _update_widget_state(key_val: str, key_widget: str, value: float):
+    """Callback seguro para atualizar estado e o widget visual."""
     st.session_state[key_val] = value
+    st.session_state[key_widget] = value # Atualiza visualmente o input box
 
 def _render_robust_vol_widget(i, key_val):
-    """Widget de Volatilidade Completo (Datas, Múltiplos Tickers, Auditoria)."""
     st.markdown("Volatilidade (%)")
     c_in, c_pop = st.columns([0.85, 0.15])
     
+    key_widget = f"w_vol_{i}"
+    
     # Input Numérico Principal
-    val = c_in.number_input("Vol", value=st.session_state[key_val], key=f"w_vol_{i}", label_visibility="collapsed", step=0.5)
-    st.session_state[key_val] = val # Sincronia bidirecional
+    val = c_in.number_input("Vol", value=st.session_state[key_val], key=key_widget, label_visibility="collapsed", step=0.5)
+    st.session_state[key_val] = val
 
     with c_pop.popover("🔍"):
         st.markdown("###### Calcular Volatilidade")
@@ -187,48 +205,32 @@ def _render_robust_vol_widget(i, key_val):
             res = st.session_state[k_res]
             if "summary" in res:
                 summ = res['summary']
-                # Opções de Seleção
                 opts = {
                     f"EWMA (Exponencial): {summ['mean_ewma']*100:.2f}%": summ['mean_ewma']*100,
                     f"Histórica (Std): {summ['mean_std']*100:.2f}%": summ['mean_std']*100
                 }
-                if summ.get('mean_garch', 0) > 0:
-                    opts[f"GARCH (Preditiva): {summ['mean_garch']*100:.2f}%"] = summ['mean_garch']*100
-                
                 sel_label = st.radio("Selecione a Métrica:", list(opts.keys()), key=f"rad_vol_{i}")
-                selected_val = opts[sel_label]
                 
-                st.button(
-                    "Aplicar Valor", 
-                    key=f"btn_apply_vol_{i}",
-                    type="primary",
-                    use_container_width=True,
-                    on_click=_update_widget_state,
-                    args=(key_val, selected_val)
-                )
+                # CORREÇÃO AQUI: Passamos key_widget para atualizar a caixa de texto
+                st.button("Aplicar Valor", key=f"btn_apply_vol_{i}", type="primary", use_container_width=True,
+                          on_click=_update_widget_state, args=(key_val, key_widget, opts[sel_label]))
                 
-                # Botão de Auditoria
                 if "audit_excel" in res and res["audit_excel"]:
-                    st.download_button(
-                        label="💾 Baixar Auditoria (XLSX)",
-                        data=res["audit_excel"],
-                        file_name=f"auditoria_volatilidade_tranche_{i+1}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key=f"dl_vol_{i}",
-                        use_container_width=True
-                    )
+                    st.download_button("💾 Baixar Auditoria (XLSX)", data=res["audit_excel"],
+                                       file_name=f"auditoria_vol_{i+1}.xlsx",
+                                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                       key=f"dl_vol_{i}", use_container_width=True)
             elif "error" in res:
                 st.error("Erro na busca.")
-
     return val
 
 def _render_robust_rate_widget(i, key_val, t_years):
-    """Widget de Taxa DI Completo (Busca B3, Tabela, Seleção por Vencimento)."""
     st.markdown("Taxa Livre de Risco (%)")
     c_in, c_pop = st.columns([0.85, 0.15])
     
-    # Input Numérico Principal
-    val = c_in.number_input("Rate", value=st.session_state[key_val], key=f"w_rate_{i}", label_visibility="collapsed", step=0.05)
+    key_widget = f"w_rate_{i}"
+    
+    val = c_in.number_input("Rate", value=st.session_state[key_val], key=key_widget, label_visibility="collapsed", step=0.05)
     st.session_state[key_val] = val
 
     with c_pop.popover("📉"):
@@ -243,56 +245,29 @@ def _render_robust_rate_widget(i, key_val, t_years):
         
         if k_df in st.session_state and not st.session_state[k_df].empty:
             df = st.session_state[k_df]
-            
-            # Visualização Tabela
-            df_show = df.copy()
-            df_show['Taxa (%)'] = (df_show['Taxa'] * 100).map('{:.2f}'.format)
-            col_venc = 'Vencimento_Fmt' if 'Vencimento_Fmt' in df.columns else 'Vencimento_Str'
-            
-            st.dataframe(
-                df_show[[col_venc, 'Taxa (%)']].rename(columns={col_venc: 'Vencimento'}), 
-                height=150, 
-                hide_index=True,
-                use_container_width=True
-            )
-            
-            # Lógica de Seleção Inteligente
+            df['Label'] = df.apply(lambda x: f"{x.get('Vencimento_Fmt', x.get('Vencimento_Str'))} - {x['Taxa']*100:.2f}%", axis=1)
             target_days = t_years * 365
             idx_closest = (df['Dias_Corridos'] - target_days).abs().idxmin()
             
-            df['Label'] = df.apply(lambda x: f"{x[col_venc]} - {x['Taxa']*100:.2f}%", axis=1)
-            
-            st.markdown(f"**Vencimento Alvo (~{t_years} anos):**")
-            selected_label = st.selectbox(
-                "Selecionar Vértice", 
-                options=df['Label'],
-                index=int(idx_closest),
-                key=f"sel_di_{i}",
-                label_visibility="collapsed"
-            )
+            st.dataframe(df[['Label', 'Taxa']], height=150, hide_index=True, use_container_width=True)
+            selected_label = st.selectbox("Selecionar Vértice", options=df['Label'], index=int(idx_closest), key=f"sel_di_{i}")
             
             if selected_label:
                 row = df[df['Label'] == selected_label].iloc[0]
-                sel_taxa_pct = row['Taxa'] * 100.0
-                
-                st.button(
-                    f"Usar {selected_label}", 
-                    key=f"btn_apply_di_{i}",
-                    type="primary",
-                    use_container_width=True,
-                    on_click=_update_widget_state,
-                    args=(key_val, sel_taxa_pct)
-                )
-        elif k_df in st.session_state:
-            st.warning("Nenhum dado encontrado para esta data (Feriado/Fim de semana?).")
-
+                # CORREÇÃO AQUI: Passamos key_widget para atualizar a caixa de texto
+                st.button(f"Usar {selected_label}", key=f"btn_apply_di_{i}", type="primary", use_container_width=True,
+                          on_click=_update_widget_state, args=(key_val, key_widget, row['Taxa'] * 100.0))
     return val
 
-# --- LÓGICA DE CÁLCULO E HELPERS GLOBAIS ---
+# --- LÓGICA DE CÁLCULO ---
 
 def _execute_calc_restore(inputs, model):
     results = []
     total_fv = 0.0
+    
+    total_prop = sum([i['Prop'] for i in inputs])
+    if total_prop < 0.01:
+        st.warning(f"⚠️ Atenção: A soma dos pesos (Prop) é {total_prop*100:.1f}%. Verifique se configurou os pesos corretamente.")
 
     for item in inputs:
         S, K, T, r, vol, q = item['S'], item['K'], item['T'], item['r'], item['Vol'], item['q']
@@ -301,27 +276,31 @@ def _execute_calc_restore(inputs, model):
         
         fv = 0.0
         
-        if model == PricingModelType.BLACK_SCHOLES_GRADED:
-            fv = FinancialMath.bs_call(S, K, T, r, vol, q)
-            
-        elif model == PricingModelType.RSU:
-            base_val = S * np.exp(-q * vesting)
-            disc = 0.0
-            if lockup > 0:
-                disc = FinancialMath.calculate_lockup_discount(vol, lockup, base_val, q)
-            fv = base_val - disc
-            
-        elif model == PricingModelType.BINOMIAL:
-            fv = FinancialMath.binomial_custom_optimized(
-                S=S, K=K, r_effective=r, vol=vol, q_yield_eff=q,
-                vesting_years=vesting,
-                turnover_w=item['Turnover'],
-                multiple_M=item['M'],
-                hurdle_H=0.0,
-                T_years=T,
-                inflacao_anual=item['StrikeCorr'],
-                lockup_years=lockup
-            )
+        try:
+            if model == PricingModelType.BLACK_SCHOLES_GRADED:
+                fv = FinancialMath.bs_call(S, K, T, r, vol, q)
+                
+            elif model == PricingModelType.RSU:
+                base_val = S * np.exp(-q * vesting)
+                disc = 0.0
+                if lockup > 0:
+                    disc = FinancialMath.calculate_lockup_discount(vol, lockup, base_val, q)
+                fv = base_val - disc
+                
+            elif model == PricingModelType.BINOMIAL:
+                fv = FinancialMath.binomial_custom_optimized(
+                    S=S, K=K, r_effective=r, vol=vol, q_yield_eff=q,
+                    vesting_years=vesting,
+                    turnover_w=item['Turnover'],
+                    multiple_M=item['M'],
+                    hurdle_H=0.0,
+                    T_years=T,
+                    inflacao_anual=item['StrikeCorr'],
+                    lockup_years=lockup
+                )
+        except Exception as e:
+            st.error(f"Erro ao calcular tranche {item['TrancheID']}: {e}")
+            fv = 0.0
 
         w_fv = fv * prop
         total_fv += w_fv
@@ -333,11 +312,15 @@ def _execute_calc_restore(inputs, model):
     AppState.set_calc_results(results)
     st.success(f"Cálculo Concluído! Fair Value Total: R$ {total_fv:,.2f}")
     
+    # Exibição Formatada
     df = pd.DataFrame(results)
-    cols_show = ["TrancheID", "FV Unit", "FV Ponderado", "S", "K", "Vol", "T"]
-    st.dataframe(df[[c for c in cols_show if c in df.columns]], use_container_width=True)
+    if not df.empty:
+        cols_show = ["TrancheID", "FV Unit", "FV Ponderado", "S", "K", "Vol", "T", "Prop"]
+        # Garante que as colunas existam antes de exibir
+        cols_existentes = [c for c in cols_show if c in df.columns]
+        st.dataframe(df[cols_existentes], use_container_width=True)
 
-# Mantidos apenas para não quebrar referências antigas, se houver
+# Mantidos apenas para não quebrar referências antigas (se houver)
 def _render_volatility_widget_global():
     key = "global_vol_compat"
     if key not in st.session_state: st.session_state[key] = 30.0
