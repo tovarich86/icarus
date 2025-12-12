@@ -1,6 +1,6 @@
 """
 Serviço de Integração com IA e Processamento de Documentos.
-Versão Corrigida: Tratamento robusto de erros JSON e parser tolerante.
+Versão Híbrida: Integração de Motor de Regras (Regex) com IA Generativa.
 """
 
 import json
@@ -22,13 +22,18 @@ try:
 except ImportError:
     HAS_GEMINI = False
 
+# Importações do Domínio e Serviços
 from core.domain import PlanAnalysisResult, Tranche, PricingModelType, SettlementType
+from services.rule_extractor import RuleBasedExtractor  # Novo Motor de Regras
 
 class DocumentService:
     """
-    Fachada para serviços de leitura de documentos e geração via LLM.
-    Inclui tratamento robusto para falhas de geração de JSON.
+    Fachada para serviços de leitura de documentos, extração baseada em regras 
+    e geração via LLM.
     """
+
+    # Instância estática do extrator para performance (evita recompilar regex)
+    _rule_extractor = RuleBasedExtractor()
 
     @staticmethod
     def extract_text(uploaded_file) -> str:
@@ -57,22 +62,86 @@ class DocumentService:
         return text
 
     @staticmethod
+    def analyze_plan_hybrid(text: str, api_key: str = None, use_ai: bool = True) -> PlanAnalysisResult:
+        """
+        Função principal de orquestração.
+        1. Executa extração Hard-Coded (Regras/Regex).
+        2. Se use_ai=False, retorna o resultado das regras imediatamente.
+        3. Se use_ai=True, usa os dados das regras como contexto para a IA refinar.
+        """
+        # 1. Extração Hard-Coded (Custo Zero e Alta Precisão para números)
+        rule_data = DocumentService._rule_extractor.analyze_single_plan(text)
+        
+        # 2. Modo Apenas Regras (Sem chave de API ou opção desativada)
+        if not use_ai or not api_key:
+            return DocumentService._convert_rules_to_domain(rule_data)
+        
+        # 3. Modo Híbrido (Regras + IA)
+        return DocumentService.analyze_plan_with_gemini(text, api_key, rule_context=rule_data)
+
+    @staticmethod
+    def _convert_rules_to_domain(rule_data: dict) -> PlanAnalysisResult:
+        """
+        Converte a saída do RuleBasedExtractor diretamente para o objeto de domínio.
+        Usado quando a IA está desligada ou falha.
+        """
+        facts = rule_data.get("extracted_facts", {})
+        plan_types = rule_data.get("detected_plan_types", [])
+        topic_matches = rule_data.get("topic_matches", {})
+        
+        # Lógica Determinística para Defaults
+        main_type = plan_types[0] if plan_types else "Plano Não Classificado"
+        
+        # Inferência de Liquidação
+        settlement = SettlementType.EQUITY_SETTLED
+        if any(term in main_type for term in ["Phantom", "SAR", "Bonus", "Financeira"]):
+            settlement = SettlementType.CASH_SETTLED
+        
+        # Inferência de Modelo Baseada em Fatos
+        model = PricingModelType.BLACK_SCHOLES_GRADED
+        if facts.get("has_tsr") or facts.get("has_market_condition"):
+            model = PricingModelType.MONTE_CARLO
+        elif any(term in main_type for term in ["Restricted", "RSU", "Ações Restritas"]):
+            model = PricingModelType.RSU
+        
+        # Criação de Tranches Simplificada
+        vesting_avg = facts.get("vesting_period", 3.0)
+        tranches = [
+            Tranche(vesting_date=vesting_avg, proportion=1.0, expiration_date=10.0)
+        ]
+        
+        return PlanAnalysisResult(
+            summary=f"Plano identificado automaticamente via Regras: {main_type}.",
+            program_summary=f"**Tipo Detectado:** {main_type}\n\n**Mecanismo:** Análise baseada em palavras-chave e expressões regulares (Regex).",
+            valuation_params=f"* **Vesting (Regra):** {vesting_avg} anos.\n* **Lock-up (Regra):** {facts.get('lockup_years', 0.0)} anos.",
+            contract_features=f"Tópicos Encontrados: {', '.join(topic_matches.values())}",
+            methodology_rationale="Metodologia definida por regras estáticas. Recomenda-se validação manual ou uso de IA para maior detalhamento.",
+            model_recommended=model,
+            settlement_type=settlement,
+            model_reason="Inferido a partir da classificação do tipo de plano e presença de gatilhos de performance.",
+            model_comparison="N/A (Modo Regras)",
+            pros=["Processamento Instantâneo", "Custo Zero", "Dados Numéricos Precisos"],
+            cons=["Falta de Nuance Narrativa", "Pode perder cláusulas atípicas"],
+            tranches=tranches,
+            has_market_condition=facts.get("has_tsr", False),
+            has_strike_correction=facts.get("has_strike_correction", False),
+            option_life_years=10.0,
+            strike_is_zero=(model == PricingModelType.RSU),
+            lockup_years=facts.get('lockup_years', 0.0)
+        )
+
+    @staticmethod
     def _sanitize_json_output(raw_text: str) -> str:
-        """
-        Limpa a saída do LLM para garantir que apenas o JSON seja processado.
-        Remove blocos de código markdown (```json ... ```).
-        """
-        # Remove marcadores de código Markdown
+        """Limpa a saída do LLM para garantir JSON válido."""
         text = re.sub(r'```json\s*', '', raw_text)
         text = re.sub(r'```\s*$', '', text)
         return text.strip()
 
     @staticmethod
     @st.cache_data(show_spinner=False)
-    def analyze_plan_with_gemini(text: str, api_key: str) -> Optional[PlanAnalysisResult]:
+    def analyze_plan_with_gemini(text: str, api_key: str, rule_context: dict = None) -> Optional[PlanAnalysisResult]:
         """
-        Envia o texto do contrato para o Gemini e converte a resposta JSON
-        em um objeto tipado PlanAnalysisResult.
+        Envia o texto para o Gemini, injetando o contexto das regras para aumentar a precisão.
         """
         if not HAS_GEMINI or not api_key:
             return None
@@ -80,161 +149,104 @@ class DocumentService:
         genai.configure(api_key=api_key)
         
         generation_config = {
-            "temperature": 0.5, # Baixa temperatura para seguir regras estritas
+            "temperature": 0.3, # Reduzida para ser mais factual
             "response_mime_type": "application/json",
             "max_output_tokens": 4000
         }
 
-        # Recomendação: Use gemini-1.5-flash para equilíbrio entre velocidade e raciocínio
         model = genai.GenerativeModel(
-            model_name='gemini-2.5-flash-lite', 
+            model_name='gemini-1.5-flash', 
             generation_config=generation_config
         )
         
+        # Construção do Contexto das Regras (Grounding)
+        context_str = ""
+        if rule_context:
+            facts = rule_context.get("extracted_facts", {})
+            types = rule_context.get("detected_plan_types", [])
+            
+            context_str = f"""
+            ### DADOS DE AUDITORIA PRELIMINAR (IMPORTANTE):
+            O sistema já analisou este documento via algoritmos matemáticos (Regex) e encontrou com ALTA CONFIANÇA:
+            - Tipo de Plano Provável: {', '.join(types) if types else 'Não classificado'}
+            - Vesting (Carência): {facts.get('vesting_period', 'Não identificado')} anos.
+            - Lock-up: {facts.get('lockup_years', '0')} anos.
+            - Possui Cláusula de Malus/Clawback? {'SIM' if facts.get('has_malus_clawback') else 'Não detectado'}.
+            - Possui Condição de Mercado (TSR)? {'SIM' if facts.get('has_tsr') else 'Não'}.
+            
+            DIRETRIZ: Use estes dados como base. Se o texto for ambíguo, confie nestes números extraídos.
+            """
+        
         prompt = f"""
         Você é um Auditor Especialista em IFRS 2 (CPC 10). Analise o contrato e gere um JSON para precificação.
+        
+        {context_str}
 
         ### 1. ÁRVORE DE DECISÃO DE MODELO (CRÍTICO - CPC 10)
-        Analise as cláusulas de vesting e escolha o modelo baseado estritamente abaixo:
-
         A) CONDIÇÃO DE MERCADO (Market Condition)? [Ref: CPC 10, Apêndice A]
-           - Gatilhos: Preço da ação, TSR, Comparação com Índices (Ibovespa).
-           - MODELO: "Monte Carlo". (Obrigatório para simular trajetória).
+           - Gatilhos: Preço da ação, TSR, Comparação com Índices.
+           - MODELO: "Monte Carlo".
 
-        B) CONDIÇÃO DE NÃO-MERCADO (Non-Market)? [Ref: CPC 10, Item 19]
-           - Gatilhos: EBITDA, Lucro Líquido, Receita, Metas Operacionais.
+        B) CONDIÇÃO DE NÃO-MERCADO? [Ref: CPC 10, Item 19]
+           - Gatilhos: EBITDA, Lucro Líquido.
            - MODELO: "Black-Scholes" ou "Binomial".
-           - REGRA: PROIBIDO "Monte Carlo". A meta afeta apenas a quantidade (Vesting), não o preço unitário.
+           - REGRA: PROIBIDO "Monte Carlo".
 
-        C) EXERCÍCIO ANTECIPADO (Americano)? [Ref: CPC 10, B5]
-           - Se existe janela de exercício > 6 meses entre Vesting e Vencimento.
-           - MODELO: "Binomial" (Preferível ao Black-Scholes).
+        C) EXERCÍCIO ANTECIPADO? [Ref: CPC 10, B5]
+           - Janela > 6 meses entre Vesting e Vencimento.
+           - MODELO: "Binomial".
 
         D) STRIKE ZERO?
-           - Se Preço de Exercício é simbólico ou R$ 0,00.
            - MODELO: "RSU".
 
-        ### 2. REGRAS DE FORMATAÇÃO DE TEXTO
+        ### 2. ESTRUTURA DO JSON
+        Gere um JSON estrito com os campos: "program_summary", "valuation_params", "summary", "contract_features", "model_data".
         
-        **Campo "program_summary" (Narrativo):**
-        - Resuma: O que é o plano, quem recebe e qual o gatilho principal.
-
-        **Campo "valuation_params" (Visual - Markdown):**
-        - OBRIGATÓRIO: Use Bullet Points (*) com uma linha em branco entre eles.
-        - Exemplo:
-          * **Strike:** R$ 10,00.
-          
-          * **Vesting:** 3 anos cliff.
-          
-          * **Volatilidade:** Implícita de 30%.
-
-        **Campo "deep_rationale" (Técnico):**
-        - Escreva um parágrafo técnico (4-8 linhas).
-
-         - SE for EBITDA/Lucro: Explique explicitamente que é uma "Condição de Não-Mercado" e que o modelo deve ignorar essa meta no cálculo do preço, ajustando apenas a quantidade esperada (Vesting).
-
-         - Cite os itens do CPC 10 (ex: "Conforme Item 19 do CPC 10...").
-
-        2. Em seguida, liste: Strike, Spot (se houver), preço do ativo  subjacente, Volatilidade implícita no texto,carência e vida de cada tranch Vida da Opção, indicador de performance de mercado e/ou não mercado se houver, .
-
-        3. Tratamento de Dividendos: Explique claramente se o yield deve ser considerado (q > 0) ou se há proteção de strike (q = 0).
-
-        4.  NÃO seja breve. Escreva um parágrafo detalhado (4 a 8 linhas).
-
-        5.  Cite explicitamente os termos do CPC 10 / IFRS 2.
-
-        6.  Justifique a escolha do modelo contrastando com as limitações dos outros.
-
-            - Ex: "O modelo Binomial é exigido conforme parágrafo B5 do CPC 10 pois captura o exercício antecipado (Opção Americana), algo que o Black-Scholes não faz..."
-
-            - Ex: "Devido à 'Condição de Mercado' (TSR), o CPC 10 exige modelo estocástico (Monte Carlo) para refletir a volatilidade conjunta..."
+        No campo "model_data", inclua "recommended_model", "settlement_type" (EQUITY_SETTLED/CASH_SETTLED) e "params".
+        Dentro de "params", extraia: "option_life", "strike_price", "vesting_schedule" (lista de objetos), etc.
 
         ### 3. CONTEXTO DO CONTRATO
-
-        TEXTO DO CONTRATO:
         {text[:80000]}
-
-        SAÍDA JSON (ESTRITA):
-        {{
-            "program_summary": "Resumo Markdown usando \\n\\n para parágrafos.",
-            "valuation_params": "Resumo técnico usando \\n\\n. Incluir análise de Dividendos na carência.",
-            "summary": "Resumo geral curto.",
-            "contract_features": "Principais cláusulas.",
-            "model_data": {{
-                "recommended_model": "RSU" | "Binomial" | "Black-Scholes" | "Monte Carlo",
-                "settlement_type": "EQUITY_SETTLED" | "CASH_SETTLED" | "HYBRID",
-                "deep_rationale": "Justificativa técnica.",
-                "justification": "Frase curta.",
-                "comparison": "Comparação breve.",
-                "pros": ["Pró 1"], 
-                "cons": ["Contra 1"],
-                "params": {{
-                    "option_life": <float>,
-                    "strike_price": <float>,
-                    "strike_is_zero": <bool>,
-                    "dividends_during_vesting": <bool>,
-                    "turnover_rate": <float>,
-                    "early_exercise_factor": <float>,
-                    "lockup_years": <float>,
-                    "has_strike_correction": <bool>,
-                    "has_market_condition": <bool>,
-                    "vesting_schedule": [
-                        {{
-                            "period_years": <float>, 
-                            "percentage": <float>,
-                            "expiration_years": <float>
-                        }}
-                    ]
-                }}
-            }}
-        }}
         """
         
         try:
             response = model.generate_content(prompt)
-            
-            # 1. Sanitização
             clean_text = DocumentService._sanitize_json_output(response.text)
-            
-            # 2. Parse Tolerante (strict=False permite quebras de linha dentro de strings)
             data = json.loads(clean_text, strict=False)
-            
             return DocumentService._map_json_to_domain(data)
             
-        except json.JSONDecodeError as e:
-            # Captura erros de parsing específicos e mostra o que a IA gerou para debug
-            st.error(f"⚠️ Erro de Sintaxe no JSON gerado pela IA: {e}")
-            with st.expander("Ver JSON Bruto (Debug)", expanded=False):
-                st.code(clean_text, language='json')
-            st.warning("Usando dados de exemplo (Mock) para não interromper o fluxo.")
+        except json.JSONDecodeError:
+            st.warning("IA gerou JSON inválido. Usando fallback de Regras.")
+            # Fallback inteligente: se a IA falhar no JSON, retorna o resultado das regras
+            if rule_context:
+                return DocumentService._convert_rules_to_domain(rule_context)
             return DocumentService.mock_analysis(text)
             
         except Exception as e:
-            st.error(f"⚠️ Erro Geral na Análise IA: {str(e)}")
+            st.error(f"Erro na IA: {str(e)}")
+            if rule_context:
+                return DocumentService._convert_rules_to_domain(rule_context)
             return DocumentService.mock_analysis(text)
 
     @staticmethod
     def _map_json_to_domain(data: Dict[str, Any]) -> PlanAnalysisResult:
-        """Helper privado para converter dicionário JSON em objeto de Domínio."""
+        """Helper privado para converter dicionário JSON da IA em objeto de Domínio."""
         model_data = data.get('model_data', {})
         params = model_data.get('params', {})
         
         # Mapeamento do Enum de Modelo
         rec_model_str = model_data.get('recommended_model', '').upper().replace(" ", "_")
         model_enum = PricingModelType.UNDEFINED
-        
         for m in PricingModelType:
             if m.name in rec_model_str:
                 model_enum = m
                 break
-        
         if model_enum == PricingModelType.UNDEFINED and "BLACK" in rec_model_str:
             model_enum = PricingModelType.BLACK_SCHOLES_GRADED
 
         # Mapeamento do Enum de Liquidação
         settlement_str = model_data.get('settlement_type', 'EQUITY_SETTLED').upper()
         settlement_enum = SettlementType.EQUITY_SETTLED 
-        
         if "CASH" in settlement_str:
             settlement_enum = SettlementType.CASH_SETTLED
         elif "HYBRID" in settlement_str:
@@ -250,7 +262,6 @@ class DocumentService:
                 p_p = float(t.get('percentage', 0))
                 p_exp = float(t.get('expiration_years', global_life))
                 if p_exp < p_y: p_exp = global_life 
-                
                 if p_y > 0: 
                     tranches.append(Tranche(vesting_date=p_y, proportion=p_p, expiration_date=p_exp))
             except (ValueError, TypeError):
@@ -282,8 +293,7 @@ class DocumentService:
     @staticmethod
     def generate_custom_monte_carlo_code(contract_text: str, params: Dict, api_key: str) -> str:
         """Gera código Python customizado via IA para simulação de Monte Carlo."""
-        if not api_key: 
-            return "# Erro: API Key necessária."
+        if not api_key: return "# Erro: API Key necessária."
         
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.5-flash')
@@ -292,53 +302,39 @@ class DocumentService:
         
         prompt = f"""
         Escreva um script Python EXECUÁVEL para precificar opções usando Monte Carlo.
-        
-        REQUISITOS:
-        1. Use 'numpy'.
-        2. Defina uma função `run_simulation()`.
-        3. No final, chame `fv = run_simulation()` e `print(fv)`.
-        
         PARÂMETROS: {json.dumps(safe_params, default=str)}
         CONTEXTO: {contract_text[:10000]}
-        
-        SAÍDA: Apenas código Python.
+        SAÍDA: Apenas código Python, importando numpy.
         """
         
         try:
             response = model.generate_content(prompt)
-            code = DocumentService._sanitize_json_output(response.text) # Reutiliza a limpeza
-            return code
+            return DocumentService._sanitize_json_output(response.text)
         except Exception as e:
             return f"# Erro na geração de código: {e}"
 
     @staticmethod
     def mock_analysis(text: str) -> PlanAnalysisResult:
-        """Gera dados fictícios para demonstração (sem API Key ou em caso de erro)."""
+        """Gera dados fictícios (Mock) para demonstração em caso de erro fatal."""
         tranches = [
             Tranche(vesting_date=1.0, proportion=0.33, expiration_date=10.0),
             Tranche(vesting_date=2.0, proportion=0.33, expiration_date=10.0),
             Tranche(vesting_date=3.0, proportion=0.34, expiration_date=10.0)
         ]
-        
         return PlanAnalysisResult(
-            summary="[MOCK - ERRO NA IA] Plano Phantom Shares Simulados.",
-            program_summary="**Atenção:** Os dados abaixo são fictícios pois houve um erro na leitura do contrato pela IA.\n\n**Instrumento:** Phantom Shares.\n\n**Liquidação:** Financeira.",
-            valuation_params="**1. Status:** Dados de Fallback.\n\n**2. Dividendos:** Não recebe.\n\n**3. Life:** 10 anos.",
-            contract_features="[MOCK] Vesting 3 anos, Life 10 anos, Pagamento em Dinheiro.",
-            methodology_rationale="[MOCK] Ocorreu um erro técnico na geração do racional pela IA. O sistema carregou este modelo padrão para permitir que você continue o teste da ferramenta manualmente.",
+            summary="[MOCK] Erro na análise. Dados fictícios carregados.",
+            program_summary="**Erro:** Não foi possível processar o documento.\n\nDados simulados para teste de interface.",
+            valuation_params="**Status:** Mock Data.",
+            contract_features="[MOCK] Dados simulados.",
+            methodology_rationale="[MOCK] Racional de contingência.",
             model_recommended=PricingModelType.BLACK_SCHOLES_GRADED,
-            settlement_type=SettlementType.CASH_SETTLED,
-            model_reason="[MOCK] Dados de contingência.",
-            model_comparison="[MOCK] Sem comparação disponível.",
-            pros=["Continuidade do teste"], 
-            cons=["Dados não reais"],
+            settlement_type=SettlementType.EQUITY_SETTLED,
+            model_reason="Fallback do sistema.",
+            model_comparison="N/A",
+            pros=[], cons=[],
             tranches=tranches,
-            has_strike_correction=False,
             option_life_years=10.0,
-            strike_price=15.0,
-            lockup_years=0.0,
-            turnover_rate=0.05,
-            early_exercise_multiple=2.0
+            strike_price=10.0
         )
 
 def safe_float(val, default=0.0):
