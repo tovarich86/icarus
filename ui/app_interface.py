@@ -637,75 +637,103 @@ class IFRS2App:
             st.error(f"Erro: {e}")
 
     def _execute_calc(self, inputs, model_type):
+        """
+        Executa o cálculo financeiro e salva o resultado COMPLETO (Inputs + Outputs) 
+        no estado para o gerador de laudo.
+        """
         res_data = []
         total_fv = 0.0
         prog = st.progress(0)
         
+        # ATUALIZAÇÃO: Sincroniza o modelo escolhido manualmente com o objeto de análise
+        # Isso corrige o erro onde o laudo diz "Binomial" mas o cálculo foi "Black-Scholes"
+        if st.session_state['analysis_result']:
+            st.session_state['analysis_result'].model_recommended = model_type
+
         for idx, item in enumerate(inputs):
             try:
-                # Inputs Básicos
-                raw_vol = item.get('Vol', 0.0)
-                vol_decimal = float(raw_vol) / 100.0 
-                
+                # Extração segura de parâmetros
                 S = float(item['S'])
                 T = float(item['T'])
                 q = float(item['q'])
-                
-                # Get Seguro para Inputs Opcionais
                 K = float(item.get('K', 0.0))
                 r = float(item.get('r', 0.0))
+                # Tratamento para Volatilidade (Input vem em % ex: 30.0, FinancialMath espera decimal 0.30)
+                raw_vol = float(item.get('Vol', 0.0))
+                vol_decimal = raw_vol / 100.0
                 
                 vesting = float(item.get('Vesting', 0.0))
-                turnover = float(item.get('Turnover', 0.0))
+                prop = float(item.get('Prop', 1.0))
                 
-                # Trava de Segurança M
-                raw_m = float(item.get('M', 2.0))
-                if raw_m < 1.0:
-                    mul_m = 1.0
-                else:
-                    mul_m = raw_m
-
-                strike_corr = float(item.get('StrikeCorr', 0.0)) 
-                lockup = float(item.get('Lockup', 0.0))
-
-                # Chamada aos Motores
+                # Cálculo
                 fv = 0.0
                 if model_type == PricingModelType.BINOMIAL:
+                    turnover = float(item.get('Turnover', 0.0))
+                    m = float(item.get('M', 2.0))
+                    corr = float(item.get('StrikeCorr', 0.0))
+                    lock = float(item.get('Lockup', 0.0))
+                    
                     fv = FinancialMath.binomial_custom_optimized(
-                        S, K, r, vol_decimal, q,
-                        vesting, turnover, mul_m, 0.0,
-                        T, strike_corr, lockup
+                        S, K, r, vol_decimal, q, vesting, turnover, m, 0.0, T, corr, lock
                     )
+                    
                 elif model_type == PricingModelType.BLACK_SCHOLES_GRADED:
                     fv = FinancialMath.bs_call(S, K, T, r, vol_decimal, q)
+                    
                 elif model_type == PricingModelType.RSU:
+                    lock = float(item.get('Lockup', 0.0))
                     base = S * np.exp(-q * T)
                     disc = 0.0
-                    if lockup > 0:
-                        disc = FinancialMath.calculate_lockup_discount(vol_decimal, lockup, base, q)
+                    if lock > 0:
+                        disc = FinancialMath.calculate_lockup_discount(vol_decimal, lock, base, q)
                     fv = base - disc
                 
-                w_fv = fv * float(item['Prop'])
+                w_fv = fv * prop
                 total_fv += w_fv
                 
-                res_data.append({
-                    "Tranche": item['TrancheID'],
+                # --- CORREÇÃO CRÍTICA AQUI ---
+                # Preservamos os inputs originais (S, K, Vol, T, r) copiando o dict 'item'
+                # E adicionamos os resultados calculados.
+                row_result = item.copy()
+                row_result.update({
                     "FV Unit": fv,
                     "FV Ponderado": w_fv,
-                    "M Ajustado": mul_m 
+                    # Garante que Vol e Taxa vão no formato decimal para o ReportService se necessário,
+                    # ou mantém o original para exibição. O ReportService espera decimal em alguns casos?
+                    # O seu ReportService atual multiplica por 100, então ele espera Decimal.
+                    # O 'item' tem Vol=30.0 e r=0.1075 (depende do widget).
+                    # Vamos padronizar para o ReportService não se perder:
+                    "Vol": vol_decimal, # Sobrescreve com decimal (0.30) para formatação correta %
+                    "r": r,             # Já deve estar em decimal (0.1075) vindo do widget rate
+                    "T": T,             # Garante que o Life (10 anos) seja passado
+                    "K": K,
+                    "S": S
                 })
-            except Exception as e:
-                st.error(f"Erro Tranche {idx+1}: {e}")
                 
+                res_data.append(row_result)
+                
+            except Exception as e:
+                st.error(f"Erro cálculo linha {idx}: {e}")
+            
             prog.progress((idx+1)/len(inputs))
-
-        st.session_state['last_calc_results'] = res_data
-        st.toast("Cálculo salvo! Acesse a aba 'Gerador de Laudo'.", icon="💾")
         
-        c1, c2 = st.columns([1,3])
+        # Salva na sessão para a aba de Relatório
+        st.session_state['last_calc_results'] = res_data
+        
+        c1, c2 = st.columns([1, 3])
         c1.metric("Fair Value Total", f"R$ {total_fv:,.2f}")
-        c2.dataframe(pd.DataFrame(res_data))
-
+        
+        # Exibe dataframe simplificado para o usuário (não precisa mostrar tudo na tela)
+        # Mas o 'res_data' completo está salvo no backend
+        df_display = pd.DataFrame(res_data)
+        cols_display = ["TrancheID", "FV Unit", "FV Ponderado", "S", "K", "Vol", "T"] # Colunas prioritárias
+        # Filtra colunas que existem no df
+        cols_existentes = [c for c in cols_display if c in df_display.columns]
+        
+        c2.dataframe(df_display[cols_existentes])
+        
+        st.success("✅ Cálculo Realizado! Os dados foram enviados para o Gerador de Laudo.")
+        
     def _manage_tranches_buttons(self):
         c1, c2 = st.columns(2)
         if c1.button("➕ Adicionar Tranche"):
