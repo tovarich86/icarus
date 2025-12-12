@@ -28,7 +28,7 @@ class ModelSelectorService:
         # 0. Enriquecimento de Racional (Contabilidade)
         # ---------------------------------------------------------------------
         # Se for passivo (Cash-Settled), garantimos que o racional mencione isso.
-        iif analysis.is_liability:  # <--- REMOVA OS PARÊNTESES
+        if analysis.is_liability:  # <--- REMOVA OS PARÊNTESES
             warning_text = f" [ATENÇÃO: Plano {analysis.settlement_type.value}. Requer remensuração do Fair Value a cada data de balanço]."
             if warning_text not in analysis.methodology_rationale:
                 analysis.methodology_rationale += warning_text
