@@ -118,7 +118,7 @@ class ReportService:
             }
         }
         
-        # Loop de Tabelas (Corrigindo a Quantidade "N/D")
+        # Loop Único de Tabelas (Preenche TODAS as listas e usa Quantidade correta)
         for i, row in enumerate(calc_results):
             lote_nome = f"Lote {row.get('TrancheID', i+1)}"
             
@@ -135,38 +135,40 @@ class ReportService:
             dt_vesting = data_outorga + timedelta(days=int(vesting_val*365))
             dt_venc = data_outorga + timedelta(days=int(T*365))
 
-            # AQUI: Usa a quantidade real em vez de N/D, distribuída ou total
+            # AQUI: Usa a quantidade real definida no input
             qtd_total = prog_info.get("qtd_beneficiarios", 1)
-            # Se quiser dividir por lote, seria qtd_total / len(calc_results), mas vamos deixar total
             qtd_display = str(qtd_total) 
 
+            # A. Tabela Cronograma
             context["tabelas"]["cronograma"].append({
                 "nome": context['programa']['nome'],
                 "numero": lote_nome,
-                "qtd": qtd_display,  # <--- CORRIGIDO
+                "qtd": qtd_display,  
                 "data_outorga": ReportService._format_date(data_outorga),
                 "data_vesting": ReportService._format_date(dt_vesting),
                 "data_vencimento": ReportService._format_date(dt_venc)
             })
 
-            # ... (Resto do loop de tabelas igual ao anterior) ...
             # B. Tabela Strikes
             context["tabelas"]["strikes"].append({
                 "lote": lote_nome,
                 "strike": ReportService._format_currency(K)
             })
+
             # C. Tabela Volatilidade
             context["tabelas"]["volatilidade"].append({
                 "data_base": ReportService._format_date(data_outorga),
                 "vencimento": ReportService._format_date(dt_venc),
                 "valor": ReportService._format_percent(Vol)
             })
+
             # D. Tabela Taxa Livre de Risco
             context["tabelas"]["taxa_livre_risco"].append({
                 "lote": lote_nome,
                 "vencimento": ReportService._format_date(dt_venc),
                 "taxa": ReportService._format_percent(r)
             })
+
             # E. Resultado Final
             context["tabelas"]["resultados_fair_value"].append({
                 "lote": lote_nome,
@@ -174,72 +176,14 @@ class ReportService:
                 "fv_final": ReportService._format_currency(row.get('FV Unit', 0))
             })
 
-        # --- 2. TABELAS DINÂMICAS ---
-        # Itera sobre os resultados salvos (agora completos com S, K, Vol, r)
-        
-        for i, row in enumerate(calc_results):
-            lote_nome = f"Lote {row.get('TrancheID', i+1)}"
-            
-            # Recupera dados brutos do dicionário
-            S = float(row.get('S', 0))
-            K = float(row.get('K', 0))
-            Vol = float(row.get('Vol', 0)) # Já vem decimal (0.30) do app_interface corrigido
-            r = float(row.get('r', 0))     # Já vem decimal (0.1075)
-            T = float(row.get('T', 0))
-            vesting_val = float(row.get('Vesting', 0))
-            
-            # Datas Calculadas
-            if vesting_val == 0 and i < len(tranches):
-                vesting_val = tranches[i].vesting_date
-                
-            dt_vesting = data_outorga + timedelta(days=int(vesting_val*365))
-            dt_venc = data_outorga + timedelta(days=int(T*365))
-
-            # A. Tabela Cronograma
-            context["tabelas"]["cronograma"].append({
-                "nome": context['programa']['nome'],
-                "numero": lote_nome,
-                "qtd": "N/D", 
-                "data_outorga": ReportService._format_date(data_outorga),
-                "data_vesting": ReportService._format_date(dt_vesting),
-                "data_vencimento": ReportService._format_date(dt_venc)
-            })
-
-            # B. Tabela Strikes (Agora preenchida!)
-            context["tabelas"]["strikes"].append({
-                "lote": lote_nome,
-                "strike": ReportService._format_currency(K)
-            })
-
-            # C. Tabela Volatilidade (Agora preenchida!)
-            context["tabelas"]["volatilidade"].append({
-                "data_base": ReportService._format_date(data_outorga),
-                "vencimento": ReportService._format_date(dt_venc),
-                "valor": ReportService._format_percent(Vol)
-            })
-
-            # D. Tabela Taxa Livre de Risco (Agora preenchida!)
-            context["tabelas"]["taxa_livre_risco"].append({
-                "lote": lote_nome,
-                "vencimento": ReportService._format_date(dt_venc),
-                "taxa": ReportService._format_percent(r)
-            })
-
-            # E. Resultado Final
-            context["tabelas"]["resultados_fair_value"].append({
-                "lote": lote_nome,
-                "modelo": context['programa']['metodologia'], # Usa o nome corrigido
-                "fv_final": ReportService._format_currency(row.get('FV Unit', 0))
-            })
-
-        # --- 3. ENCARGOS E PROJEÇÃO ---
+        # --- ENCARGOS E PROJEÇÃO ---
         
         # Tabela Encargos
         if context['contab']['tem_encargos']:
             context["tabelas"]["encargos"].append({"nome": "INSS Patronal + RAT + Terceiros", "valor": "28,0%"})
             context["tabelas"]["encargos"].append({"nome": "FGTS", "valor": "8,0%"})
 
-        # Projeção Linear Simples (Mock)
+        # Projeção Linear Simples
         total_fv = sum([float(r.get('FV Ponderado', 0)) for r in calc_results])
         anos_projecao = 3
         custo_anual = total_fv / anos_projecao if anos_projecao > 0 else 0
