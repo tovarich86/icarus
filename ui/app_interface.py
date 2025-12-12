@@ -222,7 +222,7 @@ class IFRS2App:
                 st.error(f"Erro ao gerar documento: {str(e)}")
                 
     def run(self) -> None:
-        st.set_page_config(page_title="Icarus Valuation", layout="wide", page_icon="🛡️")
+        #st.set_page_config(page_title="Icarus Valuation", layout="wide", page_icon="🛡️")
         st.title("🛡️ Icarus: Valuation IFRS 2 (Table View)")
         
         if 'analysis_result' not in st.session_state:
@@ -245,7 +245,7 @@ class IFRS2App:
             st.subheader("Upload de Contratos")
             uploaded_files = st.file_uploader("PDF ou DOCX", type=['pdf', 'docx'], accept_multiple_files=True)
             manual_text = st.text_area("Descrição Manual", height=100, placeholder="Cole cláusulas aqui...")
-            
+            use_ai = st.toggle("Usar IA Generativa", value=True, help="Se desligado, usa apenas regras (Regex). Mais rápido, mas menos detalhado.")
             if st.button("🚀 Analisar Contrato", type="primary"):
                 self._handle_analysis(uploaded_files, manual_text, gemini_key)
             st.divider()
@@ -295,6 +295,14 @@ class IFRS2App:
             return
 
         st.session_state['full_context_text'] = combined_text
+
+        with st.spinner("🔍 Executando Análise Híbrida (Regras + IA)..."):
+            # Chama o novo método Híbrido criado no passo anterior
+            analysis = DocumentService.analyze_plan_hybrid(
+                text=combined_text, 
+                api_key=api_key, 
+                use_ai=use_ai
+            )
         
         if api_key:
             with st.spinner("🤖 IA Analisando..."):
