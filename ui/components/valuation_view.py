@@ -24,10 +24,13 @@ def render_valuation_dashboard():
         with c1:
             st.subheader("Diagnóstico do Plano")
             st.info(f"**Resumo:** {analysis.summary}")
-            st.caption(f"**Classificação Contábil:** {analysis.settlement_type.value}")
+            # CORREÇÃO: Usar str() em vez de .value para evitar Attribute Error 
+            # quando o tipo Enum é perdido na serialização do Session State.
+            st.caption(f"**Classificação Contábil:** {str(analysis.settlement_type)}")
         with c2:
             st.subheader("Metodologia")
-            st.success(f"**Modelo Recomendado:** {analysis.model_recommended.value}")
+            # CORREÇÃO: Aplicar o mesmo tratamento para o Modelo Recomendado.
+            st.success(f"**Modelo Recomendado:** {str(analysis.model_recommended)}")
             st.markdown(f"> {analysis.methodology_rationale}")
 
     st.divider()
@@ -234,7 +237,7 @@ def _run_custom_code(code):
         sys.stdout = sys.__stdout__
         st.error(f"Erro na execução: {e}")
 
-def _execute_deterministic_calc(S, K, vol, r, q, model, bin_params):
+def _execute_deterministic_calc(S, K, vol, r_global, q, model, bin_params):
     """Calculadora para modelos fechados (BS, Binomial, RSU)."""
     tranches = AppState.get_tranches()
     results = []
@@ -255,7 +258,7 @@ def _execute_deterministic_calc(S, K, vol, r, q, model, bin_params):
             lockup = AppState.get_analysis().lockup_years
             discount = 0.0
             if lockup > 0:
-                discount = FinancialMath.calculate_lockup_discount(vol, lockup, base_val, q) # Chaffe usa r? (Verificar engine)
+                discount = FinancialMath.calculate_lockup_discount(vol, lockup, base_val, q) # Chaffe uses q (dividend yield) not r (risk-free rate) in the exponential decay.
             fv = base_val - discount
             
         elif model == PricingModelType.BINOMIAL:
@@ -280,7 +283,7 @@ def _execute_deterministic_calc(S, K, vol, r, q, model, bin_params):
             "Vencimento": T_life,
             "FV Unit": fv,
             "FV Ponderado": w_fv,
-            "S": S, "K": K_final, "Vol": vol, "r": r, "q": q
+            "S": S, "K": K_final, "Vol": vol, "r": r_global, "q": q
         })
 
     AppState.set_calc_results(results)
