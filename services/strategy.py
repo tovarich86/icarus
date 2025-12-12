@@ -22,6 +22,14 @@ qual motor matemático é o mais adequado, considerando agora as nuances de
 Contabilidade (Equity vs Liability) e a estrutura temporal (Vesting vs Life).
 """
 
+"""
+Serviço de Estratégia e Seleção de Modelos.
+
+Este módulo contém a lógica de negócios ("Regras do Jogo") para determinar
+qual motor matemático é o mais adequado, considerando agora as nuances de
+Contabilidade (Equity vs Liability) e a estrutura temporal (Vesting vs Life).
+"""
+
 from core.domain import PlanAnalysisResult, PricingModelType, SettlementType
 
 class ModelSelectorService:
@@ -43,7 +51,7 @@ class ModelSelectorService:
         # ---------------------------------------------------------------------
         # 0. Enriquecimento de Racional (Contabilidade)
         # ---------------------------------------------------------------------
-        # CORREÇÃO APLICADA: Removidos os parênteses de is_liability (property)
+        # Verifica se é passivo (Cash-Settled) sem usar parênteses, pois é uma property
         if analysis.is_liability:
             warning_text = f" [ATENÇÃO: Plano {analysis.settlement_type.value}. Requer remensuração do Fair Value a cada data de balanço]."
             if warning_text not in analysis.methodology_rationale:
