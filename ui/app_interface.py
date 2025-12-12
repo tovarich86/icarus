@@ -247,7 +247,7 @@ class IFRS2App:
             manual_text = st.text_area("Descrição Manual", height=100, placeholder="Cole cláusulas aqui...")
             use_ai = st.toggle("Usar IA Generativa", value=True, help="Se desligado, usa apenas regras (Regex). Mais rápido, mas menos detalhado.")
             if st.button("🚀 Analisar Contrato", type="primary"):
-                self._handle_analysis(uploaded_files, manual_text, gemini_key)
+                self._handle_analysis(uploaded_files, manual_text, gemini_key, use_ai=use_ai)
             st.divider()
             if st.button("🛠️ Modo Manual (Pular Análise)", type="secondary", help="Inicia o cálculo com parâmetros zerados, sem ler documentos."):
                 self._enable_manual_mode()
@@ -282,7 +282,7 @@ class IFRS2App:
         st.info("👈 Faça o upload do contrato para iniciar.")
         st.markdown("### Icarus Valuation\nFerramenta para precificação de opções (IFRS 2) com IA.")
 
-    def _handle_analysis(self, uploaded_files, manual_text, api_key):
+    def _handle_analysis(self, uploaded_files, manual_text, api_key, use_ai=True):
         combined_text = ""
         if uploaded_files:
             with st.spinner("Lendo arquivos..."):
