@@ -76,10 +76,6 @@ class IFRS2App:
             st.warning("⚠️ Nenhum cálculo encontrado. Realize o valuation na aba anterior.")
             return
 
-        if ReportService is None:
-            st.error("Erro Crítico: Serviço de Relatório não carregado.")
-            return
-
         # --- 1. DADOS DA EMPRESA E PROGRAMA ---
         with st.container(border=True):
             st.subheader("1. Dados da Empresa e Programa")
@@ -99,7 +95,6 @@ class IFRS2App:
             with c2:
                 prog_nome = st.text_input("Nome do Plano", "Plano de Stock Options 2025", key="rep_prog_nome")
                 
-                # Tipo detalhado para o texto introdutório
                 tipo_detalhado = st.selectbox("Tipo do Plano (Texto)", 
                                             ["Plano de Opção de Compra de Ações (Stock Options)", 
                                              "Plano de Ações Restritas (Restricted Shares)",
@@ -108,36 +103,31 @@ class IFRS2App:
                                             key="rep_tipo_detalhado")
                 
                 prog_data = st.date_input("Data de Outorga", date.today(), key="rep_prog_data")
-                prog_qtd = st.number_input("Qtd. Beneficiários", 1, 10000, 10, key="rep_prog_qtd") # <--- Este valor será usado na tabela
+                prog_qtd = st.number_input("Qtd. Beneficiários", 1, 10000, 10, key="rep_prog_qtd")
 
-        # --- 2. PREMISSAS TÉCNICAS (NOVOS SELETORES) ---
+        # --- 2. PREMISSAS TÉCNICAS (SEÇÃO CORRIGIDA) ---
         with st.container(border=True):
             st.subheader("2. Premissas Técnicas e Contábeis")
             c1, c2 = st.columns(2)
             with c1:
                 st.markdown("**Parâmetros de Mercado**")
                 
-                # SELETOR DE MOEDA (Corrige o DI vs Bond)
                 moeda_selecionada = st.selectbox(
                     "Curva de Juros (Moeda)", 
                     ["BRL (DI1 - Brasil)", "USD (Treasury Bond - EUA)", "EUR (Euro)"],
                     key="rep_moeda"
                 )
                 
-                # LÓGICA DE DIVIDENDOS (Corrige o texto de Dividendos)
-                # Tenta inferir pelo input do cálculo anterior
                 div_yield_calc = st.session_state['last_calc_results'][0].get('q', 0.0)
-                idx_div = 0 if div_yield_calc == 0 else 2 # Default: Zero ou Penaliza
+                idx_div = 0 if div_yield_calc == 0 else 2 
                 
                 cenario_div = st.selectbox(
                     "Cenário de Dividendos",
                     ["ZERO (Sem expectativa)", "PAGO (Protegido/Reinvestido)", "PENALIZA (Desconto no FV)"],
                     index=idx_div,
-                    key="rep_cenario_div",
-                    help="Define como o texto do laudo explicará o impacto dos dividendos."
+                    key="rep_cenario_div"
                 )
 
-                # Controle de Indexador
                 tem_correcao = st.session_state['analysis_result'].has_strike_correction
                 indice_texto = ""
                 if tem_correcao:
@@ -147,16 +137,29 @@ class IFRS2App:
                 st.markdown("**Parâmetros Contábeis**")
                 turnover_contab = st.number_input("Turnover Esperado (% a.a.)", 0.0, 50.0, 5.0, key="rep_turnover") / 100
                 tem_encargos = st.checkbox("Incide Encargos Sociais (INSS)?", False, key="rep_encargos")
-
+                
+                # --- CORREÇÃO AQUI: Performance (Não-Mercado) ---
                 st.markdown("---")
                 st.markdown("**Performance (Não-Mercado)**")
                 tem_nao_mercado = st.checkbox(
                     "Possui Metas Internas (KPIs)?", 
                     value=False, 
                     key="rep_flag_kpi",
-                    help="Marque se o vesting depende de EBITDA, Lucro Líquido ou Metas Operacionais (Não-Mercado)."
+                    help="Marque se o vesting depende de EBITDA, Lucro Líquido ou Metas Operacionais."
                 )
                 
+                # INICIALIZAÇÃO SEGURA (Evita NameError)
+                perc_atingimento = 1.0 
+                
+                if tem_nao_mercado:
+                    perc_atingimento = st.number_input(
+                        "Exp. Atingimento (%)", 
+                        value=100.0, 
+                        key="rep_perc_kpi",
+                        help="Estimativa de atingimento das metas para contabilização."
+                    ) / 100.0
+
+                st.markdown("---")
                 st.markdown("**Responsável Técnico**")
                 resp_nome = st.text_input("Nome", "Consultor Responsável", key="rep_resp_nome")
                 resp_cargo = st.text_input("Cargo", "Especialista", key="rep_resp_cargo")
@@ -194,20 +197,23 @@ class IFRS2App:
                     },
                     "programa": {
                         "nome": prog_nome, "data_outorga": prog_data, 
-                        "qtd_beneficiarios": prog_qtd, # <--- Passando a quantidade correta
+                        "qtd_beneficiarios": prog_qtd, 
                         "metodologia": metodologia_str, "forma_liquidacao": forma_liq_str,
                         "tipo_detalhado": tipo_detalhado
                     },
                     "responsavel": {"nome": resp_nome, "cargo": resp_cargo, "email": resp_email},
                     "contab": {
-                        "taxa_turnover": turnover_contab, "tem_encargos": tem_encargos, "tem_performance_nao_mercado": tem_nao_mercado,
-                    "percentual_atingimento": perc_atingimento
+                        "taxa_turnover": turnover_contab, 
+                        "tem_encargos": tem_encargos,
+                        # NOVOS CAMPOS SEGUROS
+                        "tem_performance_nao_mercado": tem_nao_mercado,
+                        "percentual_atingimento": perc_atingimento 
                     },
                     "calculo_extra": {
                         "metodo_privado": metodo_privado,
                         "indice_correcao_nome": indice_texto,
-                        "moeda_selecionada": "BRL" if "BRL" in moeda_selecionada else "USD", # Mapeia para BRL ou USD
-                        "cenario_dividendos": cenario_div.split(" ")[0] # Pega só a primeira palavra (ZERO, PAGO, PENALIZA)
+                        "moeda_selecionada": "BRL" if "BRL" in moeda_selecionada else "USD", 
+                        "cenario_dividendos": cenario_div.split(" ")[0] 
                     }
                 }
 
